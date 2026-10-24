@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <meta name="theme-color" content="#12372a">
+  <title>班务通 · 通知与报名助手</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">BANWUTONG · MVP 01</p>
+        <h1>通知不再沉在群聊里</h1>
+        <p class="hero-copy">导入一条班级通知，自动整理截止时间、报名材料和事项状态。</p>
+      </div>
+      <div class="hero-mark" aria-hidden="true">通</div>
+    </header>
+
+    <main>
+      <section class="metrics" aria-label="事项概览">
+        <article><span id="metric-total">0</span><small>全部事项</small></article>
+        <article><span id="metric-open">0</span><small>待处理</small></article>
+        <article><span id="metric-done">0</span><small>已完成</small></article>
+      </section>
+
+      <div class="workspace">
+        <section class="composer panel">
+          <div class="section-heading">
+            <div>
+              <p class="kicker">INGEST</p>
+              <h2>导入通知</h2>
+            </div>
+            <button class="text-button" id="sample-button" type="button">填入示例</button>
+          </div>
+          <form id="message-form">
+            <label for="message-text">原始通知</label>
+            <textarea id="message-text" required placeholder="粘贴班级群、邮件或公告中的通知……"></textarea>
+            <div class="form-footer">
+              <span id="form-status" role="status">消息原文会保留在本机数据库中。</span>
+              <button class="primary-button" type="submit">解析并保存</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="activity-panel panel">
+          <div class="section-heading">
+            <div>
+              <p class="kicker">INBOX</p>
+              <h2>事项看板</h2>
+            </div>
+            <div class="filters" role="group" aria-label="筛选事项">
+              <button class="filter active" type="button" data-status="">全部</button>
+              <button class="filter" type="button" data-status="open">待处理</button>
+              <button class="filter" type="button" data-status="completed">已完成</button>
+            </div>
+          </div>
+          <div id="activity-list" class="activity-list">
+            <div class="empty-state">正在读取本机事项……</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
+

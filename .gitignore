@@ -1,6 +1,7 @@
 # Local working files
 /work/
 /outputs/
+/data/
 
 # Secrets
 .env
@@ -10,11 +11,13 @@
 *.key
 
 # Python
-__pycache__/
-*.py[cod]
 .venv/
 venv/
+__pycache__/
+*.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 .ruff_cache/
 
 # Node
@@ -23,10 +26,11 @@ node_modules/
 dist/
 coverage/
 
-# Local databases
+# Local databases and logs
 *.db
 *.sqlite
 *.sqlite3
+*.log
 
 # Editors and operating systems
 .idea/
