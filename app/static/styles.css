@@ -22,6 +22,7 @@ body {
   font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
   min-height: 100vh;
   padding-bottom: 92px;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button, textarea { font: inherit; }
@@ -31,6 +32,11 @@ button { cursor: pointer; }
   width: min(1240px, calc(100% - 40px));
   margin: 0 auto;
   padding: 36px 0 64px;
+}
+
+.mobile-title,
+.mobile-nav {
+  display: none;
 }
 
 .hero {
@@ -609,5 +615,195 @@ textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(42,107,8
   .meta-grid { grid-template-columns: 1fr; }
   .edit-grid { grid-template-columns: 1fr; }
   .edit-field.wide { grid-column: auto; }
+}
+
+@media (max-width: 760px) {
+  body {
+    padding-bottom: calc(82px + env(safe-area-inset-bottom));
+    background: #f3eee3;
+  }
+
+  .page-shell {
+    width: 100%;
+    padding: 0 12px 20px;
+  }
+
+  .hero {
+    margin: 0 -12px 12px;
+    padding: calc(18px + env(safe-area-inset-top)) 18px 20px;
+    border-radius: 0 0 25px 25px;
+    box-shadow: 0 14px 36px rgba(18, 55, 42, 0.16);
+  }
+
+  .eyebrow { margin-bottom: 6px; font-size: 9px; }
+  .desktop-title { display: none; }
+  .mobile-title { display: inline; }
+
+  h1 {
+    font-size: 38px;
+    letter-spacing: -0.05em;
+  }
+
+  .hero-copy { display: none; }
+
+  .hero-mark {
+    display: grid;
+    position: absolute;
+    right: 17px;
+    top: 18px;
+    width: 54px;
+    height: 54px;
+    font-size: 28px;
+    opacity: 0.76;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    margin: 0 0 10px;
+  }
+
+  .metrics article {
+    display: grid;
+    justify-items: center;
+    gap: 1px;
+    padding: 11px 5px;
+    border-radius: 13px;
+  }
+
+  .metrics span { font-size: 24px; }
+  .metrics small { font-size: 10px; }
+
+  .model-bar {
+    margin-bottom: 10px;
+    padding: 13px 14px;
+    border-radius: 15px;
+    gap: 10px;
+  }
+
+  .model-bar select {
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+  }
+
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .activity-panel {
+    order: 1;
+    width: 100%;
+    min-height: 0;
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .composer {
+    order: 2;
+    width: 100%;
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .panel,
+  .model-bar {
+    box-shadow: 0 10px 28px rgba(48, 62, 53, 0.07);
+  }
+
+  .section-heading {
+    align-items: stretch;
+    margin-bottom: 14px;
+  }
+
+  .filters { width: 100%; }
+
+  .filter,
+  .trash-toggle {
+    min-height: 38px;
+    flex: 1;
+    justify-content: center;
+  }
+
+  .activity { padding: 14px; border-radius: 14px; }
+  .activity h3 { font-size: 16px; }
+  .activity-top { gap: 8px; }
+
+  .meta-grid { gap: 6px; margin: 12px 0; }
+  .meta-grid div { padding: 9px; }
+
+  .card-actions button,
+  .card-actions a,
+  .edit-actions button {
+    min-height: 40px;
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .empty-state { min-height: 230px; }
+
+  textarea {
+    min-height: 190px;
+    font-size: 16px;
+  }
+
+  .file-footer,
+  .form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primary-button {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .chat-launcher { display: none; }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 30;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+    background: rgba(249, 246, 238, 0.96);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -12px 36px rgba(23, 53, 43, 0.08);
+    backdrop-filter: blur(18px);
+  }
+
+  .mobile-nav button {
+    display: grid;
+    justify-items: center;
+    gap: 1px;
+    padding: 4px 2px;
+    color: var(--muted);
+    background: transparent;
+    border: 0;
+    border-radius: 11px;
+  }
+
+  .mobile-nav button span {
+    font-size: 21px;
+    line-height: 1;
+  }
+
+  .mobile-nav button small { font-size: 10px; }
+
+  .mobile-nav button.active {
+    color: var(--green);
+    background: rgba(42, 107, 85, 0.09);
+  }
+
+  #board-section,
+  #import-section,
+  #model-section {
+    scroll-margin-top: 10px;
+  }
 }
 

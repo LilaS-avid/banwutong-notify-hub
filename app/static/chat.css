@@ -23,7 +23,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 24px;
+  padding: max(20px, env(safe-area-inset-top)) 24px 20px;
   color: #f8f4ea;
   background: #12372a;
 }
@@ -186,7 +186,7 @@
 .chat-error:not(:empty) { padding-bottom: 10px; }
 
 .chat-composer-wrap {
-  padding: 14px 20px 16px;
+  padding: 14px 20px calc(16px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: rgba(250, 247, 239, 0.94);
 }
@@ -242,4 +242,5 @@
   .chat-header-actions span { display: none; }
   .chat-welcome { margin-top: 7vh; }
   .chat-bubble { max-width: 90%; }
+  .chat-composer textarea { min-height: 54px; }
 }

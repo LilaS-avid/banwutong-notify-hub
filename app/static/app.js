@@ -15,6 +15,11 @@ const elements = {
   modelSelect: document.querySelector("#model-provider"),
   modelNote: document.querySelector("#model-note"),
   openChat: document.querySelector("#open-chat"),
+  mobileNav: document.querySelector("#mobile-nav"),
+  mobileButtons: [...document.querySelectorAll("[data-mobile-action]")],
+  boardSection: document.querySelector("#board-section"),
+  importSection: document.querySelector("#import-section"),
+  modelSection: document.querySelector("#model-section"),
   chatDialog: document.querySelector("#chat-dialog"),
   chatFrame: document.querySelector("#chat-frame"),
   filters: [...document.querySelectorAll(".filter")],
@@ -46,6 +51,18 @@ const statusLabels = {
   ignored: "已忽略",
   cancelled: "已取消",
 };
+
+const mobileViewport = window.matchMedia("(max-width: 760px)");
+
+function updateDeviceLayout() {
+  const mobileDevice =
+    mobileViewport.matches || navigator.userAgentData?.mobile === true;
+  document.body.classList.toggle("device-mobile", mobileDevice);
+  document.documentElement.dataset.device = mobileDevice ? "mobile" : "desktop";
+}
+
+updateDeviceLayout();
+mobileViewport.addEventListener("change", updateDeviceLayout);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -300,11 +317,37 @@ elements.modelSelect.addEventListener("change", async () => {
   }
 });
 
-elements.openChat.addEventListener("click", () => {
+function openChatDialog() {
   if (!elements.chatFrame.getAttribute("src")) {
     elements.chatFrame.src = elements.chatFrame.dataset.src;
   }
   elements.chatDialog.showModal();
+}
+
+elements.openChat.addEventListener("click", openChatDialog);
+
+elements.mobileButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    elements.mobileButtons.forEach((item) =>
+      item.classList.toggle("active", item === button),
+    );
+    const action = button.dataset.mobileAction;
+    if (action === "chat") {
+      openChatDialog();
+      return;
+    }
+    if (action === "import") {
+      elements.importSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => elements.text.focus(), 260);
+      return;
+    }
+    if (action === "settings") {
+      elements.modelSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => elements.modelSelect.focus(), 260);
+      return;
+    }
+    elements.boardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 });
 
 window.addEventListener("message", (event) => {

@@ -2,18 +2,22 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light only">
   <meta name="theme-color" content="#12372a">
   <title>班务通 · 通知与报名助手</title>
+  <link rel="icon" href="/static/favicon.ico">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <div class="page-shell">
-    <header class="hero">
+    <header class="hero" id="home-top">
       <div>
         <p class="eyebrow">BANWUTONG · MVP 01</p>
-        <h1>通知不再沉在群聊里</h1>
+        <h1>
+          <span class="desktop-title">通知不再沉在群聊里</span>
+          <span class="mobile-title">班务通</span>
+        </h1>
         <p class="hero-copy">导入一条班级通知，自动整理截止时间、报名材料和事项状态。</p>
       </div>
       <div class="hero-mark" aria-hidden="true">通</div>
@@ -26,7 +30,7 @@
         <article><span id="metric-done">0</span><small>已完成</small></article>
       </section>
 
-      <section class="model-bar" aria-label="模型设置">
+      <section class="model-bar" id="model-section" aria-label="模型设置">
         <div>
           <p class="kicker">MODEL</p>
           <strong>通知识别模型</strong>
@@ -41,7 +45,7 @@
       </section>
 
       <div class="workspace">
-        <section class="composer panel">
+        <section class="composer panel" id="import-section">
           <div class="section-heading">
             <div>
               <p class="kicker">INGEST</p>
@@ -72,7 +76,7 @@
           </form>
         </section>
 
-        <section class="activity-panel panel">
+        <section class="activity-panel panel" id="board-section">
           <div class="section-heading">
             <div>
               <p class="kicker" id="view-kicker">INBOX</p>
@@ -113,6 +117,24 @@
     </span>
     <span class="chat-launcher-action">打开对话</span>
   </button>
+  <nav class="mobile-nav" id="mobile-nav" aria-label="手机快捷导航">
+    <button class="active" type="button" data-mobile-action="board">
+      <span aria-hidden="true">≡</span>
+      <small>事项</small>
+    </button>
+    <button type="button" data-mobile-action="import">
+      <span aria-hidden="true">＋</span>
+      <small>导入</small>
+    </button>
+    <button type="button" data-mobile-action="chat">
+      <span aria-hidden="true">◌</span>
+      <small>AI</small>
+    </button>
+    <button type="button" data-mobile-action="settings">
+      <span aria-hidden="true">⚙</span>
+      <small>设置</small>
+    </button>
+  </nav>
   <dialog id="chat-dialog" class="chat-dialog">
     <iframe
       id="chat-frame"

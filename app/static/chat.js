@@ -83,7 +83,7 @@ async function loadProvider() {
   if (activeProvider === "rules") {
     elements.input.disabled = true;
     elements.send.disabled = true;
-    elements.error.textContent = "当前是本地规则模式，请回主页切换到 Codex 或天翼模型。";
+    elements.error.textContent = "当前是本地规则模式，请回主页切换到云端模型。";
   }
 }
 
