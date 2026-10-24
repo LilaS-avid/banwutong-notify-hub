@@ -7,9 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
-from pypdf import PdfReader
-
-
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json"}
 DOCX_SUFFIXES = {".docx"}
@@ -17,6 +14,8 @@ PDF_SUFFIXES = {".pdf"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_SUFFIXES = TEXT_SUFFIXES | DOCX_SUFFIXES | PDF_SUFFIXES | IMAGE_SUFFIXES
 OCR_SCORE_THRESHOLD = 0.3
+PDF_RENDER_DPI = 200
+PDF_TEXT_THRESHOLD = 20
 
 _OCR_ENGINE = None
 _OCR_LOCK = threading.Lock()
@@ -102,19 +101,134 @@ def _extract_docx(path: Path) -> list[DocumentBlock]:
     return blocks
 
 
+def _ocr_blocks(source, prefix: str) -> list[DocumentBlock]:
+    with _OCR_LOCK:
+        engine = _get_ocr_engine()
+        result, _ = engine(source)
+    detected: list[tuple[float, float, float, float, float, str]] = []
+    for item in result or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 3:
+            continue
+        text = str(item[1]).strip()
+        try:
+            score = float(item[2])
+        except (TypeError, ValueError):
+            score = 0.0
+        if not text or score < OCR_SCORE_THRESHOLD:
+            continue
+        try:
+            xs = [float(point[0]) for point in item[0]]
+            ys = [float(point[1]) for point in item[0]]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not xs or not ys:
+            continue
+        left, right = min(xs), max(xs)
+        top, bottom = min(ys), max(ys)
+        detected.append(
+            (left, right, top, bottom, max(1.0, bottom - top), text)
+        )
+
+    rows: list[list[tuple[float, float, float, float, float, str]]] = []
+    for item in sorted(detected, key=lambda value: ((value[2] + value[3]) / 2, value[0])):
+        center = (item[2] + item[3]) / 2
+        if rows:
+            row_center = sum((value[2] + value[3]) / 2 for value in rows[-1]) / len(rows[-1])
+            row_height = max(value[4] for value in rows[-1])
+            if abs(center - row_center) <= row_height * 0.55:
+                rows[-1].append(item)
+                continue
+        rows.append([item])
+
+    lines: list[str] = []
+    for row in rows:
+        ordered = sorted(row, key=lambda value: value[0])
+        combined = ""
+        previous_right = None
+        previous_height = 1.0
+        for left, right, _, _, height, text in ordered:
+            if previous_right is not None and left - previous_right > max(previous_height, height):
+                combined += " "
+            overlap = 0
+            max_overlap = min(len(combined), len(text))
+            for size in range(max_overlap, 0, -1):
+                if combined[-size:] == text[:size]:
+                    overlap = size
+                    break
+            combined += text[overlap:]
+            previous_right = right
+            previous_height = height
+        combined = re.sub(
+            r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})(\d{1,2}:\d{2})",
+            r"\1 \2",
+            combined,
+        )
+        combined = re.sub(
+            r"(\d{1,2}月\d{1,2}日)(\d{1,2}:\d{2})",
+            r"\1 \2",
+            combined,
+        )
+        if combined.strip():
+            lines.append(combined.strip())
+    return [
+        DocumentBlock(
+            locator=f"{prefix}-{index}",
+            block_type="ocr_line",
+            text=text,
+        )
+        for index, text in enumerate(lines, start=1)
+    ]
+
+
 def _extract_pdf(path: Path) -> list[DocumentBlock]:
-    reader = PdfReader(str(path))
+    import numpy as np
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(str(path))
     blocks: list[DocumentBlock] = []
-    for index, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
-        if text:
-            blocks.append(
-                DocumentBlock(
-                    locator=f"page-{index}",
-                    block_type="page",
-                    text=text,
+    try:
+        for index in range(len(pdf)):
+            page = pdf[index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    text = (text_page.get_text_range() or "").strip()
+                finally:
+                    text_page.close()
+                compact_length = len(re.sub(r"\s+", "", text))
+                if compact_length >= PDF_TEXT_THRESHOLD:
+                    blocks.append(
+                        DocumentBlock(
+                            locator=f"page-{index + 1}",
+                            block_type="page",
+                            text=text,
+                        )
+                    )
+                    continue
+
+                bitmap = page.render(scale=PDF_RENDER_DPI / 72)
+                try:
+                    image = np.asarray(bitmap.to_pil().convert("RGB"))
+                finally:
+                    bitmap.close()
+                ocr_blocks = _ocr_blocks(
+                    image,
+                    f"page-{index + 1}-ocr-line",
                 )
-            )
+                if ocr_blocks:
+                    blocks.extend(ocr_blocks)
+                elif text:
+                    blocks.append(
+                        DocumentBlock(
+                            locator=f"page-{index + 1}",
+                            block_type="page",
+                            text=text,
+                        )
+                    )
+            finally:
+                page.close()
+    finally:
+        pdf.close()
     return blocks
 
 
@@ -128,28 +242,7 @@ def _get_ocr_engine():
 
 
 def _extract_image(path: Path) -> list[DocumentBlock]:
-    with _OCR_LOCK:
-        engine = _get_ocr_engine()
-        result, _ = engine(str(path))
-    lines: list[str] = []
-    for item in result or []:
-        if not isinstance(item, (list, tuple)) or len(item) < 3:
-            continue
-        text = str(item[1]).strip()
-        try:
-            score = float(item[2])
-        except (TypeError, ValueError):
-            score = 0.0
-        if text and score >= OCR_SCORE_THRESHOLD:
-            lines.append(text)
-    return [
-        DocumentBlock(
-            locator=f"ocr-line-{index}",
-            block_type="ocr_line",
-            text=text,
-        )
-        for index, text in enumerate(lines, start=1)
-    ]
+    return _ocr_blocks(str(path), "ocr-line")
 
 
 def _text_blocks(text: str, prefix: str = "block") -> list[DocumentBlock]:
