@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <meta name="theme-color" content="#12372a">
+  <title>班务通 AI 对话</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/chat.css">
+</head>
+<body class="chat-page">
+  <div class="chat-shell">
+    <header class="chat-header">
+      <div class="chat-identity">
+        <span class="chat-orb" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </span>
+        <div>
+          <small>BANWUTONG AI</small>
+          <h1>班务通对话</h1>
+        </div>
+      </div>
+      <div class="chat-header-actions">
+        <span id="provider-label">读取模型……</span>
+        <button id="clear-chat" type="button">清空</button>
+        <button id="close-chat" class="chat-close hidden" type="button">关闭</button>
+      </div>
+    </header>
+
+    <main id="chat-messages" class="chat-messages" aria-live="polite">
+      <section id="chat-welcome" class="chat-welcome">
+        <p class="eyebrow">DIRECT CHAT</p>
+        <h2>有什么要问的？</h2>
+        <p>我可以结合当前事项，帮你梳理截止时间、材料和下一步行动。</p>
+        <div class="prompt-chips">
+          <button type="button" data-prompt="最近有哪些事项快截止？">最近有哪些事项快截止？</button>
+          <button type="button" data-prompt="帮我按截止时间整理当前事项。">按截止时间整理事项</button>
+          <button type="button" data-prompt="我应该优先准备哪些报名材料？">优先准备哪些材料？</button>
+        </div>
+      </section>
+    </main>
+
+    <p id="chat-error" class="chat-error" role="alert"></p>
+
+    <footer class="chat-composer-wrap">
+      <form id="chat-form" class="chat-composer">
+        <textarea
+          id="chat-input"
+          rows="1"
+          maxlength="20000"
+          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+          aria-label="向班务通 AI 提问"
+        ></textarea>
+        <button id="chat-send" type="submit" aria-label="发送">发送</button>
+      </form>
+      <p>AI 可能会出错，请以原始通知为准。</p>
+    </footer>
+  </div>
+  <script src="/static/chat.js" defer></script>
+</body>
+</html>

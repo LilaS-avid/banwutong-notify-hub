@@ -1,7 +1,9 @@
 # Local working files
 /work/
 /outputs/
+/output/
 /data/
+.playwright-cli/
 
 # Secrets
 .env
@@ -37,3 +39,4 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+~$*

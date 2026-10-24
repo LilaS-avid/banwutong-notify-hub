@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class MessageIn(BaseModel):
-    platform: Literal["manual", "qq", "wecom", "email"] = "manual"
+    platform: Literal["manual", "qq", "wecom", "email", "file"] = "manual"
     external_id: str = Field(min_length=1, max_length=200)
     group_id: str | None = Field(default=None, max_length=200)
     sender_id: str | None = Field(default=None, max_length=200)
@@ -36,9 +36,73 @@ class ActivityOut(BaseModel):
     updated_at: str
 
 
+class TrashActivityOut(ActivityOut):
+    deleted_at: str
+    purge_after: str
+
+
 class IngestOut(BaseModel):
     disposition: Literal["created", "updated", "duplicate"]
     activity: ActivityOut
+
+
+class DocumentOut(BaseModel):
+    id: int
+    original_name: str
+    media_type: str | None
+    size_bytes: int
+    sha256: str
+    extract_status: Literal["processed", "stored_only", "failed"]
+    extract_note: str | None
+    analysis_method: str
+    block_count: int
+    activity_id: int | None
+    created_at: str
+
+
+class DocumentBlockOut(BaseModel):
+    id: int
+    locator: str
+    block_type: str
+    text: str
+    ordinal: int
+
+
+class FileUploadOut(BaseModel):
+    disposition: Literal["created", "duplicate"]
+    document: DocumentOut
+    activity: ActivityOut | None
+    activities: list[ActivityOut]
+
+
+class ModelChoice(BaseModel):
+    id: Literal["cloud", "rules"]
+    label: str
+    available: bool
+    note: str
+
+
+class ModelSettingsOut(BaseModel):
+    provider: Literal["cloud", "rules"]
+    choices: list[ModelChoice]
+
+
+class ModelSettingsUpdate(BaseModel):
+    provider: Literal["cloud", "rules"]
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=30)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    provider: Literal["cloud"]
 
 
 class StatusUpdate(BaseModel):

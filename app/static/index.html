@@ -26,6 +26,20 @@
         <article><span id="metric-done">0</span><small>已完成</small></article>
       </section>
 
+      <section class="model-bar" aria-label="模型设置">
+        <div>
+          <p class="kicker">MODEL</p>
+          <strong>通知识别模型</strong>
+          <span id="model-note">正在读取模型配置……</span>
+        </div>
+        <label for="model-provider">
+          <span>当前模型</span>
+          <select id="model-provider" aria-label="选择通知识别模型">
+            <option value="codex">Codex 默认模型</option>
+          </select>
+        </label>
+      </section>
+
       <div class="workspace">
         <section class="composer panel">
           <div class="section-heading">
@@ -43,20 +57,47 @@
               <button class="primary-button" type="submit">解析并保存</button>
             </div>
           </form>
+          <div class="upload-divider"><span>或上传文件</span></div>
+          <form id="file-form" class="file-form">
+            <input
+              id="file-input"
+              type="file"
+              accept=".txt,.md,.csv,.json,.docx,.pdf,.png,.jpg,.jpeg,.webp"
+              required
+            >
+            <div class="file-footer">
+              <span id="file-status">支持 TXT、Markdown、DOCX、PDF 和图片，最大 20 MB。</span>
+              <button class="primary-button" type="submit">上传并解析</button>
+            </div>
+          </form>
         </section>
 
         <section class="activity-panel panel">
           <div class="section-heading">
             <div>
-              <p class="kicker">INBOX</p>
-              <h2>事项看板</h2>
+              <p class="kicker" id="view-kicker">INBOX</p>
+              <h2 id="view-title">事项看板</h2>
             </div>
-            <div class="filters" role="group" aria-label="筛选事项">
-              <button class="filter active" type="button" data-status="">全部</button>
-              <button class="filter" type="button" data-status="open">待处理</button>
-              <button class="filter" type="button" data-status="completed">已完成</button>
+            <div class="view-actions">
+              <div class="filters" id="status-filters" role="group" aria-label="筛选事项">
+                <button class="filter active" type="button" data-status="">全部</button>
+                <button class="filter" type="button" data-status="open">待处理</button>
+                <button class="filter" type="button" data-status="completed">已完成</button>
+              </div>
+              <button
+                class="trash-toggle"
+                id="trash-toggle"
+                type="button"
+                aria-expanded="false"
+              >
+                <span id="trash-label">回收站</span>
+                <span id="trash-count">0</span>
+              </button>
             </div>
           </div>
+          <p class="trash-hint hidden" id="trash-hint">
+            删除的事项会保留 7 天，到期后自动彻底删除。
+          </p>
           <div id="activity-list" class="activity-list">
             <div class="empty-state">正在读取本机事项……</div>
           </div>
@@ -64,6 +105,22 @@
       </div>
     </main>
   </div>
+  <button class="chat-launcher" id="open-chat" type="button">
+    <span class="chat-launcher-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="chat-launcher-copy">
+      <strong>向班务通 AI 提问</strong>
+      <small>打开独立对话窗口</small>
+    </span>
+    <span class="chat-launcher-action">打开对话</span>
+  </button>
+  <dialog id="chat-dialog" class="chat-dialog">
+    <iframe
+      id="chat-frame"
+      title="班务通 AI 对话"
+      data-src="/chat?embedded=1"
+      loading="lazy"
+    ></iframe>
+  </dialog>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

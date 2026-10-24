@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "activities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "audience": { "type": ["string", "null"] },
+          "deadline": { "type": ["string", "null"] },
+          "location": { "type": ["string", "null"] },
+          "materials": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "registration_url": { "type": ["string", "null"] },
+          "contact": { "type": ["string", "null"] },
+          "change_type": {
+            "type": "string",
+            "enum": ["new", "update", "cancel"]
+          },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": [
+          "title",
+          "audience",
+          "deadline",
+          "location",
+          "materials",
+          "registration_url",
+          "contact",
+          "change_type",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["activities"],
+  "additionalProperties": false
+}

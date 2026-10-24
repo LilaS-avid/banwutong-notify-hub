@@ -1,5 +1,6 @@
 const API = "/api";
 let currentStatus = "";
+let currentView = "board";
 
 const elements = {
   form: document.querySelector("#message-form"),
@@ -8,7 +9,22 @@ const elements = {
   status: document.querySelector("#form-status"),
   list: document.querySelector("#activity-list"),
   sample: document.querySelector("#sample-button"),
+  fileForm: document.querySelector("#file-form"),
+  fileInput: document.querySelector("#file-input"),
+  fileStatus: document.querySelector("#file-status"),
+  modelSelect: document.querySelector("#model-provider"),
+  modelNote: document.querySelector("#model-note"),
+  openChat: document.querySelector("#open-chat"),
+  chatDialog: document.querySelector("#chat-dialog"),
+  chatFrame: document.querySelector("#chat-frame"),
   filters: [...document.querySelectorAll(".filter")],
+  statusFilters: document.querySelector("#status-filters"),
+  trashToggle: document.querySelector("#trash-toggle"),
+  trashLabel: document.querySelector("#trash-label"),
+  trashCount: document.querySelector("#trash-count"),
+  trashHint: document.querySelector("#trash-hint"),
+  viewTitle: document.querySelector("#view-title"),
+  viewKicker: document.querySelector("#view-kicker"),
   metrics: {
     total: document.querySelector("#metric-total"),
     open: document.querySelector("#metric-open"),
@@ -68,6 +84,18 @@ function formatDateTimeLocal(value) {
   ].join("");
 }
 
+function formatTrashTime(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
 function editForm(activity) {
   return `
     <form class="edit-form hidden" data-edit-id="${activity.id}">
@@ -114,6 +142,10 @@ function activityCard(activity) {
     effectiveStatus === "completed"
       ? `<button type="button" data-action="status" data-status="open" data-id="${activity.id}">重新打开</button>`
       : `<button type="button" data-action="status" data-status="completed" data-id="${activity.id}">标记完成</button>`;
+  const deleteAction =
+    effectiveStatus === "completed"
+      ? `<button class="danger-action" type="button" data-action="delete" data-id="${activity.id}">删除</button>`
+      : "";
 
   return `
     <article class="activity">
@@ -132,34 +164,91 @@ function activityCard(activity) {
         ${link}
         <button type="button" data-action="edit">编辑内容</button>
         ${statusActions}
+        ${deleteAction}
+      </div>
+    </article>`;
+}
+
+function trashCard(activity) {
+  return `
+    <article class="activity trash-activity">
+      <div class="activity-top">
+        <h3>${escapeHtml(activity.title)}</h3>
+        <span class="badge done">${statusLabels[activity.status] || "已删除"}</span>
+      </div>
+      <div class="meta-grid">
+        <div><b>删除时间</b>${escapeHtml(formatTrashTime(activity.deleted_at))}</div>
+        <div><b>自动彻底删除</b>${escapeHtml(formatTrashTime(activity.purge_after))}</div>
+      </div>
+      <div class="card-actions">
+        <button type="button" data-action="restore" data-id="${activity.id}">恢复到看板</button>
+        <button class="danger-action" type="button" data-action="purge" data-id="${activity.id}">彻底删除</button>
       </div>
     </article>`;
 }
 
 async function request(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
   const response = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers,
     ...options,
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     throw new Error(detail.detail || `请求失败：${response.status}`);
   }
+  if (response.status === 204) return null;
   return response.json();
+}
+
+function setView(view) {
+  currentView = view;
+  const showingTrash = currentView === "trash";
+  elements.statusFilters.classList.toggle("hidden", showingTrash);
+  elements.trashHint.classList.toggle("hidden", !showingTrash);
+  elements.viewTitle.textContent = showingTrash ? "事项回收站" : "事项看板";
+  elements.viewKicker.textContent = showingTrash ? "TRASH · 保留 7 天" : "INBOX";
+  elements.trashLabel.textContent = showingTrash ? "返回看板" : "回收站";
+  elements.trashToggle.setAttribute("aria-expanded", String(showingTrash));
+  elements.trashToggle.classList.toggle("active", showingTrash);
 }
 
 async function refresh() {
   const query = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : "";
-  const [all, visible] = await Promise.all([
+  const [all, trash, visible] = await Promise.all([
     request("/activities"),
+    request("/trash"),
     request(`/activities${query}`),
   ]);
   elements.metrics.total.textContent = all.length;
   elements.metrics.open.textContent = all.filter((item) => item.status === "open").length;
   elements.metrics.done.textContent = all.filter((item) => item.status === "completed").length;
+  elements.trashCount.textContent = trash.length;
+  if (currentView === "trash") {
+    elements.list.innerHTML = trash.length
+      ? trash.map(trashCard).join("")
+      : `<div class="empty-state">回收站是空的</div>`;
+    return;
+  }
   elements.list.innerHTML = visible.length
     ? visible.map(activityCard).join("")
     : `<div class="empty-state">${currentStatus ? "这个分类里还没有事项" : "导入一条通知，建立第一张事项卡"}</div>`;
+}
+
+async function loadModelSettings() {
+  const settings = await request("/model-settings");
+  elements.modelSelect.innerHTML = settings.choices
+    .map(
+      (choice) =>
+        `<option value="${escapeHtml(choice.id)}" ${choice.available ? "" : "disabled"}>${escapeHtml(choice.label)}${choice.available ? "" : "（不可用）"}</option>`,
+    )
+    .join("");
+  elements.modelSelect.value = settings.provider;
+  const selected = settings.choices.find((choice) => choice.id === settings.provider);
+  elements.modelNote.textContent = selected?.note || "";
 }
 
 async function submitMessage(event) {
@@ -192,6 +281,75 @@ elements.sample.addEventListener("click", () => {
   elements.text.focus();
 });
 
+elements.modelSelect.addEventListener("change", async () => {
+  elements.modelSelect.disabled = true;
+  try {
+    const settings = await request("/model-settings", {
+      method: "PUT",
+      body: JSON.stringify({ provider: elements.modelSelect.value }),
+    });
+    const selected = settings.choices.find(
+      (choice) => choice.id === settings.provider,
+    );
+    elements.modelNote.textContent = selected?.note || "模型已切换。";
+  } catch (error) {
+    elements.modelNote.textContent = error.message;
+    await loadModelSettings();
+  } finally {
+    elements.modelSelect.disabled = false;
+  }
+});
+
+elements.openChat.addEventListener("click", () => {
+  if (!elements.chatFrame.getAttribute("src")) {
+    elements.chatFrame.src = elements.chatFrame.dataset.src;
+  }
+  elements.chatDialog.showModal();
+});
+
+window.addEventListener("message", (event) => {
+  if (
+    event.origin === window.location.origin &&
+    event.data?.type === "banwutong-close-chat"
+  ) {
+    elements.chatDialog.close();
+  }
+});
+
+elements.fileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = elements.fileInput.files[0];
+  if (!file) return;
+  const button = elements.fileForm.querySelector("button[type='submit']");
+  button.disabled = true;
+  elements.fileStatus.textContent = `正在上传 ${file.name}……`;
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const result = await request("/files", {
+      method: "POST",
+      body: formData,
+    });
+    if (result.disposition === "duplicate") {
+      elements.fileStatus.textContent = "这个文件已经上传过。";
+    } else if (result.activities.length) {
+      elements.fileStatus.textContent =
+        `文件已保存，并整理了 ${result.activities.length} 个事项。`;
+    } else if (result.document.extract_status === "stored_only") {
+      elements.fileStatus.textContent = "文件已保存；图片 OCR 暂未启用。";
+    } else {
+      elements.fileStatus.textContent =
+        result.document.extract_note || "文件已保存，但未提取到文本。";
+    }
+    elements.fileForm.reset();
+    await refresh();
+  } catch (error) {
+    elements.fileStatus.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 elements.filters.forEach((button) => {
   button.addEventListener("click", () => {
     currentStatus = button.dataset.status;
@@ -199,6 +357,13 @@ elements.filters.forEach((button) => {
     refresh().catch((error) => {
       elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     });
+  });
+});
+
+elements.trashToggle.addEventListener("click", () => {
+  setView(currentView === "trash" ? "board" : "trash");
+  refresh().catch((error) => {
+    elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
   });
 });
 
@@ -213,6 +378,43 @@ elements.list.addEventListener("click", async (event) => {
   }
   if (button.dataset.action === "cancel-edit") {
     button.closest(".edit-form").classList.add("hidden");
+    return;
+  }
+  if (button.dataset.action === "delete") {
+    if (!window.confirm("确定删除这个已完成事项吗？它会在回收站保留 7 天。")) return;
+    button.disabled = true;
+    try {
+      await request(`/activities/${button.dataset.id}`, { method: "DELETE" });
+      elements.status.textContent = "事项已移入回收站，将在 7 天后自动彻底删除。";
+      await refresh();
+    } catch (error) {
+      elements.status.textContent = error.message;
+      button.disabled = false;
+    }
+    return;
+  }
+  if (button.dataset.action === "restore") {
+    button.disabled = true;
+    try {
+      await request(`/activities/${button.dataset.id}/restore`, { method: "POST" });
+      elements.status.textContent = "事项已恢复到看板。";
+      await refresh();
+    } catch (error) {
+      elements.status.textContent = error.message;
+      button.disabled = false;
+    }
+    return;
+  }
+  if (button.dataset.action === "purge") {
+    if (!window.confirm("彻底删除后无法恢复，确定继续吗？")) return;
+    button.disabled = true;
+    try {
+      await request(`/trash/${button.dataset.id}`, { method: "DELETE" });
+      await refresh();
+    } catch (error) {
+      elements.status.textContent = error.message;
+      button.disabled = false;
+    }
     return;
   }
   button.disabled = true;
@@ -263,5 +465,8 @@ elements.list.addEventListener("submit", async (event) => {
 
 refresh().catch((error) => {
   elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+});
+loadModelSettings().catch((error) => {
+  elements.modelNote.textContent = error.message;
 });
 
