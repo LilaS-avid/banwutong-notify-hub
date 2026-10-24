@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 
 try {
-  & $python -c "import fastapi, uvicorn, tzdata" 2>$null
+  & $python -c "import fastapi, uvicorn, tzdata, pypdf, multipart, dotenv, rapidocr_onnxruntime" 2>$null
   if ($LASTEXITCODE -ne 0) {
     & $python -m pip install --disable-pip-version-check -r $requirements
   }
