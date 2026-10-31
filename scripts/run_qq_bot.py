@@ -29,8 +29,13 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
+
+# 先加载项目根目录的 .env，否则 QQBOT_APPID / QQBOT_SECRET 读不到
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def _install_full_group_message_support() -> None:
@@ -53,7 +58,7 @@ def _install_full_group_message_support() -> None:
     ConnectionState.parse_group_message_create = parse_group_message_create
 
 
-def build_bot(api_base: str, dry_run: bool):
+def build_bot(api_base: str, dry_run: bool, sandbox: bool = False, debug: bool = False):
     from botpy import Client, Intents
 
     from app.qq_adapter import event_from_message, to_message_in
@@ -64,7 +69,7 @@ def build_bot(api_base: str, dry_run: bool):
             if payload is None:
                 return
             if dry_run:
-                print(json.dumps(payload, ensure_ascii=False))
+                print(json.dumps(payload, ensure_ascii=False), flush=True)
                 return
             try:
                 async with httpx.AsyncClient(timeout=30) as client:
@@ -74,7 +79,7 @@ def build_bot(api_base: str, dry_run: bool):
                     disposition = response.json().get("disposition", "")
                 except ValueError:
                     disposition = response.text[:100]
-                print(f"[{event_type}] {payload['external_id']} -> {response.status_code} {disposition}")
+                print(f"[{event_type}] {payload['external_id']} -> {response.status_code} {disposition}", flush=True)
             except Exception as error:  # noqa: BLE001 - 转发失败不能让机器人掉线
                 print(f"[{event_type}] 转发失败：{type(error).__name__}: {error}", file=sys.stderr)
 
@@ -87,13 +92,27 @@ def build_bot(api_base: str, dry_run: bool):
         async def on_c2c_message_create(self, message):
             await self._forward(message, "C2C_MESSAGE_CREATE")
 
-    intents = Intents.public_messages | Intents.direct_message
-    return BanwutongBot(intents=intents)
+    # 注意：botpy 的 Intents 不是标准 enum.Flag，不能用 `a | b` 组合，
+    # 必须用构造参数（实测 `Intents.public_messages | Intents.direct_message` 会 TypeError）
+    intents = Intents(public_messages=True, direct_message=True)
+    kwargs = {"is_sandbox": sandbox}
+    if debug:
+        import logging
+
+        kwargs["log_level"] = logging.DEBUG
+    return BanwutongBot(intents=intents, **kwargs)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="启动 QQ 机器人并把消息转发给班务通")
     parser.add_argument("--dry-run", action="store_true", help="只打印，不写入后端")
+    parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        default=os.environ.get("QQBOT_SANDBOX", "").lower() in ("1", "true", "yes"),
+        help="连沙箱环境（机器人未上线、私聊收不到消息时试试）",
+    )
+    parser.add_argument("--debug", action="store_true", help="打印 botpy 调试日志，用来看平台有没有推事件")
     parser.add_argument("--api", default=os.environ.get("BANWUTONG_API", "http://127.0.0.1:8765"))
     args = parser.parse_args()
 
@@ -106,9 +125,9 @@ def main() -> None:
         )
 
     _install_full_group_message_support()
-    bot = build_bot(args.api.rstrip("/"), args.dry_run)
+    bot = build_bot(args.api.rstrip("/"), args.dry_run, sandbox=args.sandbox, debug=args.debug)
 
-    print(f"连接 QQ 机器人 AppID={appid[:4]}****，后端={args.api}，dry_run={args.dry_run}")
+    print(f"连接 QQ 机器人 AppID={appid[:4]}****，后端={args.api}，dry_run={args.dry_run}，sandbox={args.sandbox}")
     bot.run(appid=appid, secret=secret)
 
 
