@@ -61,6 +61,23 @@ python -m app.qq_adapter --replay samples/qq_events.jsonl --post http://127.0.0.
 样例文件里放了 5 条事件：群 @ 消息、群普通消息、纯图片、私聊、以及一条无关事件（应被跳过）。
 转换结果应为：**5 条读入，3 条转换，2 条跳过**。
 
+## 五之二、有账号之后怎么跑真机器人
+
+连接层已经写好：`scripts/run_qq_bot.py`。它负责鉴权、WebSocket、心跳和重连，
+转换仍然交给 `app/qq_adapter.py`。
+
+```powershell
+pip install -r requirements-bot.txt        # 只装机器人依赖，核心服务不需要
+# .env 里填 QQBOT_APPID / QQBOT_SECRET
+python -m scripts.run_qq_bot --dry-run     # 先只打印收到的消息
+python -m scripts.run_qq_bot               # 再真正写入后端
+```
+
+> **踩过的坑**：官方 SDK（botpy 1.2.1）**没有群内全量消息的解析器**，只支持 @ 消息。
+> `scripts/run_qq_bot.py` 在启动时补了一个解析器（`_install_full_group_message_support`），
+> 否则群里不 @ 机器人的通知会被当作未知事件丢掉。这条有测试覆盖（`tests/test_qq_runner.py`）。
+
+
 ## 六、拿到真实报文后要做什么
 
 1. 把真实事件原样存成 `samples/real_events.jsonl`（**注意脱敏：`group_openid`、`member_openid` 可保留，正文里的手机号/姓名要替换**）

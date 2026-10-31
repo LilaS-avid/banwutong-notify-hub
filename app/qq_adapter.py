@@ -92,6 +92,31 @@ def to_message_in(event: dict) -> dict | None:
     }
 
 
+def event_from_message(message, event_type: str) -> dict:
+    """把 botpy 的消息对象还原成平台事件字典。
+
+    botpy 的 `GroupMessage` / `C2CMessage` 已经把原始 `d` 拆成了属性，
+    这里再拼回原结构，好让同一套 `to_message_in` 同时处理"真实推送"和"样例回放"。
+    全程用 getattr，所以本模块不依赖 botpy，用假对象也能测。
+    """
+    author = getattr(message, "author", None)
+    return {
+        "t": event_type,
+        "d": {
+            "id": getattr(message, "id", None),
+            "content": getattr(message, "content", None),
+            "group_openid": getattr(message, "group_openid", None),
+            "author": {
+                "member_openid": getattr(author, "member_openid", None),
+                "user_openid": getattr(author, "user_openid", None),
+                "id": getattr(author, "id", None),
+            },
+            "timestamp": getattr(message, "timestamp", None),
+            "attachments": getattr(message, "attachments", None),
+        },
+    }
+
+
 def iter_events(path: Path):
     """逐行读 JSONL；整份 JSON 数组或单个对象也支持。"""
     raw = path.read_text(encoding="utf-8").strip()
