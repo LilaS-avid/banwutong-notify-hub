@@ -182,15 +182,28 @@ def _parse_materials(text: str) -> list[str]:
 
 
 def _detect_change(text: str) -> str:
-    if re.search(r"取消|终止|暂停", text):
-        return "cancel"
-    if re.search(r"延期|推迟|调整|补充|更正|改为|变更", text):
+    # “取消后不退费”“取消评优及加分资格”这类是规则说明，不是活动被取消，
+    # 之前只要出现“取消”就判 cancel，会把正常的报名通知整条标成已取消。
+    for match in re.finditer(r"取消|终止|暂停", text):
+        tail = text[match.end():match.end() + 4]
+        if not re.match(r"^(后|不|资格|评优|加分|其)", tail):
+            return "cancel"
+    if re.search(r"延期|推迟|延长|改到|调整|补充|更正|改为|变更", text):
         return "update"
     return "new"
 
 
+# 标题里这些词不区分活动，剥掉后再比，否则“关于…的通知”一加就变成新活动
+_DEDUPE_STOPWORDS = ("关于", "的通知", "通知", "报名", "提醒", "工作")
+
+
 def normalise_key(title: str) -> str:
-    return re.sub(r"[\W_]+", "", title, flags=re.UNICODE).lower()
+    text = title or ""
+    text = re.sub(r"^\s*[【\[（(][^】\]）)]{0,12}[】\]）)]", "", text)   # 【重要】这类前缀
+    text = re.sub(r"^\s*\d+\s*[.、)]\s*", "", text)                    # 1. （一）
+    for word in _DEDUPE_STOPWORDS:
+        text = text.replace(word, "")
+    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE).lower()
 
 
 def parse_notification(text: str, now: datetime | None = None) -> ParsedActivity:

@@ -7,4 +7,5 @@ python-multipart>=0.0.9,<1
 pypdfium2>=4,<6
 python-dotenv>=1.0,<2
 rapidocr_onnxruntime>=1.2.3,<2
+Pillow>=10
 
