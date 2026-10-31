@@ -1,0 +1,5 @@
+{"id":"evt-1","op":0,"t":"GROUP_AT_MESSAGE_CREATE","d":{"id":"msg-0001","content":"<@!1020304> 关于2026年英语四级考试报名的通知\n报名截止：2026-11-06 12:00\n报名方式：登录教务系统","group_openid":"group-demo-01","author":{"member_openid":"member-a"},"timestamp":"2026-10-31T09:00:00+08:00"}}
+{"t":"GROUP_MESSAGE_CREATE","d":{"id":"msg-0002","content":"大家明天九点到，需要学习观看一个视频","group_openid":"group-demo-01","author":{"member_openid":"member-b"},"timestamp":"2026-10-31T09:05:00+08:00"}}
+{"t":"GROUP_MESSAGE_CREATE","d":{"id":"msg-0003","content":"","group_openid":"group-demo-01","author":{"member_openid":"member-c"},"attachments":[{"url":"https://example.com/poster.png","content_type":"image/png"}],"timestamp":"2026-10-31T09:10:00+08:00"}}
+{"t":"C2C_MESSAGE_CREATE","d":{"id":"msg-0004","content":"私聊测试一下","author":{"user_openid":"user-x"},"timestamp":"2026-10-31T09:15:00+08:00"}}
+{"t":"GROUP_ADD_ROBOT","d":{"group_openid":"group-demo-01"}}
