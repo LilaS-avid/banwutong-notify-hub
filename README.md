@@ -136,6 +136,40 @@ QQ 机器人适配器正在做（账号已注册，AppID 已拿到；群消息�
 
 具体执行方法见 [角色 A 执行手册](docs/role-a-playbook.md)。
 
+## 接云端模型（已实测可行）
+
+后端支持任何 OpenAI 兼容接口，配置 `BANWUTONG_LLM_*` 三个环境变量即可，不用改代码。
+本项目实测用的是中国电信天翼 AI 开放平台（TeleAgent / 星辰）：
+
+```text
+BANWUTONG_LLM_BASE_URL=https://api-maas.teleai.com.cn/v1
+BANWUTONG_LLM_MODEL=Xing4.0-29B-A4B
+BANWUTONG_LLM_API_KEY=你的Key
+```
+
+配好并重启后，把模型切到云端：
+
+```powershell
+# 查看可用模型
+curl http://127.0.0.1:8765/api/model-settings
+
+# 切换到云端模型
+curl -X PUT http://127.0.0.1:8765/api/model-settings -H "Content-Type: application/json" -d '{"provider":"cloud"}'
+```
+
+也可以在主页底部「当前模型」里点选。
+
+**实测对比（同一条自由文本通知）**：
+
+| 字段 | 规则版 | 云端模型 |
+| --- | --- | --- |
+| 标题 | 整句话 | 投票选举人大代表 |
+| 地点 | 空 | 体育馆 |
+| 对象 | 空 | 全体学生 |
+| 材料 | 空 | 钢笔 |
+
+自由文本（真实群消息的常态）必须走云端模型，规则版只认「报名截止：…」这种带标签的格式。
+
 ## 本地开发
 
 ```powershell
