@@ -3,6 +3,7 @@
 /outputs/
 /output/
 /data/
+/tools/
 .playwright-cli/
 
 # Secrets

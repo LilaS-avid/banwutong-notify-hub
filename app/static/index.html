@@ -7,6 +7,8 @@
   <meta name="theme-color" content="#12372a">
   <title>班务通 · 通知与报名助手</title>
   <link rel="icon" href="/static/favicon.ico">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -42,6 +44,15 @@
             <option value="codex">Codex 默认模型</option>
           </select>
         </label>
+      </section>
+
+      <section class="model-bar" id="push-section" aria-label="截止提醒">
+        <div>
+          <p class="kicker">REMINDER</p>
+          <strong>截止提醒</strong>
+          <span id="push-note">开启后，截止前 7 天 / 24 小时 / 3 小时和当天早上会收到通知。</span>
+        </div>
+        <button class="primary-button" id="push-enable" type="button">开启提醒</button>
       </section>
 
       <div class="workspace">
@@ -107,6 +118,23 @@
           </div>
         </section>
       </div>
+
+      <section class="panel message-panel" id="message-section">
+        <div class="section-heading">
+          <div>
+            <p class="kicker">STREAM</p>
+            <h2>群消息流水</h2>
+          </div>
+          <div class="view-actions">
+            <button class="trash-toggle" id="message-toggle" type="button" aria-expanded="false">
+              <span id="message-label">展开</span>
+              <span id="message-count">0</span>
+            </button>
+          </div>
+        </div>
+        <p class="stream-hint">所有收到的消息都在这里留档；判定为闲聊的不占事项看板，需要时可手动提取成卡片。</p>
+        <div id="message-list" class="message-list hidden"></div>
+      </section>
     </main>
   </div>
   <button class="chat-launcher" id="open-chat" type="button">
@@ -143,7 +171,7 @@
       loading="lazy"
     ></iframe>
   </dialog>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20261101-stream" defer></script>
 </body>
 </html>
 

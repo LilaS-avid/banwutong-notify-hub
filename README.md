@@ -2,10 +2,6 @@
 
 班级通知理解与报名提醒助手。当前仓库是角色 A 主导的第一版骨架，目标是先跑通一条可验证的纵向闭环，而不是一次接入所有平台。
 
-> **如果你是用 AI 工具接手这个仓库，先读 [docs/ai-handoff.md](docs/ai-handoff.md)。**
-> 里面写了当前状态、哪些代码不能动（及原因）、已知缺陷的证据、待办优先级和自证命令，
-> 能省掉大量重复排查与误改。
-
 ## 已完成（已实测可用）
 
 - 接收标准化通知消息并保留原文（`POST /api/messages`，返回 `created` / `updated` / `duplicate`）
@@ -27,7 +23,7 @@
 
 | 功能 | 现在的样子 | 还缺什么 |
 |---|---|---|
-| **提醒** | `GET /api/reminders` 只能**查看**哪些事项快到期 | **没有任何发送实现，也没有定时任务**——到截止时间不会主动通知任何人 |
+| **提醒** | 已有 Web Push 通道：截止前 7 天 / 24 小时 / 3 小时 / 当天 08:00 各推一次，`notifications` 表保证幂等 | 需要公网 HTTPS 才能订阅；QQ / 邮件通道尚未接入 |
 | 同一活动去重 | 只按标题匹配（已剥离“关于/的通知”等停用词） | 未实现 SRS 8.2 的 L1（链接优先）与 L3（相似度/包含） |
 | 延期 / 补充 | 标题完全一致时才会更新原事项 | 同名不同期的两场活动无法拆开：`activities.dedupe_key` 带 UNIQUE 约束，要改表结构并迁移数据 |
 | 待核对 | 只有 `needs_review` 标记 | 没有队列、没有界面、没有催办，标了也没人处理 |
@@ -81,7 +77,9 @@ pytest -q
 
 接口：
 
-- `POST /api/messages`：导入消息，返回 `created`、`updated` 或 `duplicate`
+- `POST /api/messages`：导入消息，返回 `created`、`updated`、`duplicate` 或 `skipped`（判定为闲聊时不建卡）
+- `GET /api/messages`：群消息流水（含 `kind`，`chat` 为闲聊、`notice` 为通知）
+- `POST /api/messages/{id}/promote`：把流水里的闲聊手动提取成事项卡
 - `POST /api/files`：上传文件并自动提取、整理事项
 - `GET /api/files`：已上传文件列表
 - `GET /api/files/{id}/blocks`：文档页、段落和表格结构

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS messages (
     sender_id TEXT,
     sent_at TEXT NOT NULL,
     raw_text TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'notice',
     created_at TEXT NOT NULL,
     UNIQUE(platform, external_id)
 );
@@ -102,6 +103,29 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    activity_id INTEGER NOT NULL,
+    rule TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'webpush',
+    detail TEXT,
+    sent_at TEXT NOT NULL,
+    UNIQUE(activity_id, rule, channel),
+    FOREIGN KEY(activity_id) REFERENCES activities(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_activity
+ON notifications(activity_id);
+
 CREATE INDEX IF NOT EXISTS idx_activities_deadline
 ON activities(deadline);
 
@@ -151,6 +175,14 @@ class Database:
             if "deleted_at" not in activity_columns:
                 connection.execute(
                     "ALTER TABLE activities ADD COLUMN deleted_at TEXT"
+                )
+            message_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(messages)")
+            }
+            if "kind" not in message_columns:
+                connection.execute(
+                    "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'notice'"
                 )
             connection.execute(
                 """

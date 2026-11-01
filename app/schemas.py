@@ -42,8 +42,19 @@ class TrashActivityOut(ActivityOut):
 
 
 class IngestOut(BaseModel):
-    disposition: Literal["created", "updated", "duplicate"]
-    activity: ActivityOut
+    disposition: Literal["created", "updated", "duplicate", "skipped"]
+    activity: ActivityOut | None = None
+
+
+class MessageOut(BaseModel):
+    id: int
+    platform: str
+    text: str
+    kind: Literal["notice", "chat"]
+    sent_at: str
+    sender_id: str | None
+    activity_id: int | None
+    created_at: str
 
 
 class DocumentOut(BaseModel):
@@ -136,6 +147,34 @@ class ActivityEdit(BaseModel):
 class ReminderOut(BaseModel):
     activity: ActivityOut
     due_state: Literal["overdue", "today", "upcoming"]
+
+
+class PushKeys(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=500)
+    auth: str = Field(min_length=1, max_length=500)
+
+
+class PushSubscribe(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2000)
+    keys: PushKeys
+
+
+class PushUnsubscribe(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2000)
+
+
+class NotificationOut(BaseModel):
+    id: int
+    activity_id: int
+    rule: str
+    channel: str
+    detail: str | None = None
+    sent_at: str
+
+
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class HealthOut(BaseModel):

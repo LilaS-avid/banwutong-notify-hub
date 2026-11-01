@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,6 +15,7 @@ from app.schemas import (
     DocumentBlockOut,
     DocumentOut,
     MessageIn,
+    MessageOut,
     TrashActivityOut,
 )
 
@@ -25,6 +27,12 @@ SELECT d.*,
        (SELECT COUNT(*) FROM document_blocks b WHERE b.document_id = d.id)
        AS block_count
 FROM documents d
+"""
+MESSAGE_SELECT = """
+SELECT m.*,
+       (SELECT MIN(e.activity_id) FROM activity_events e WHERE e.message_id = m.id)
+       AS activity_id
+FROM messages m
 """
 
 
@@ -59,6 +67,20 @@ def _to_trash_activity(row) -> TrashActivityOut:
         **_to_activity(row).model_dump(),
         deleted_at=deleted_at.astimezone(SHANGHAI).isoformat(),
         purge_after=purge_after.isoformat(),
+    )
+
+
+def _to_message(row) -> MessageOut:
+    kind = (row["kind"] or "notice").strip().lower()
+    return MessageOut(
+        id=row["id"],
+        platform=row["platform"],
+        text=row["raw_text"],
+        kind="chat" if kind == "chat" else "notice",
+        sent_at=row["sent_at"],
+        sender_id=row["sender_id"],
+        activity_id=row["activity_id"],
+        created_at=row["created_at"],
     )
 
 
@@ -111,6 +133,85 @@ class ActivityRepository:
 
     def ingest(self, payload: MessageIn, parsed: ParsedActivity) -> tuple[str, ActivityOut]:
         return self.ingest_many(payload, [parsed])[0]
+
+    def _message(self, connection, message_id: int) -> MessageOut | None:
+        row = connection.execute(
+            MESSAGE_SELECT + " WHERE m.id = ?",
+            (message_id,),
+        ).fetchone()
+        return _to_message(row) if row else None
+
+    def record_message(self, payload: MessageIn, kind: str = "chat") -> MessageOut:
+        """只登记消息、不建事项卡（闲聊/表情走这条路）。"""
+        now = _now_iso()
+        sent_at_value = payload.sent_at or datetime.now(SHANGHAI)
+        if sent_at_value.tzinfo is None:
+            sent_at_value = sent_at_value.replace(tzinfo=SHANGHAI)
+        sent_at = sent_at_value.astimezone(SHANGHAI).isoformat()
+        with self.database.connect() as connection:
+            existing = self._message_exists(connection, payload)
+            if existing is not None:
+                connection.execute(
+                    "UPDATE messages SET kind = ? WHERE id = ?",
+                    (kind, existing),
+                )
+                return self._message(connection, existing)
+            cursor = connection.execute(
+                """
+                INSERT INTO messages(
+                    platform, external_id, group_id, sender_id,
+                    sent_at, raw_text, kind, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload.platform,
+                    payload.external_id,
+                    payload.group_id,
+                    payload.sender_id,
+                    sent_at,
+                    payload.text,
+                    kind,
+                    now,
+                ),
+            )
+            message_id = int(cursor.lastrowid)
+        return self.get_message(message_id)
+
+    def get_message(self, message_id: int) -> MessageOut | None:
+        with self.database.connect() as connection:
+            return self._message(connection, message_id)
+
+    def message_input(self, message_id: int) -> MessageIn | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return MessageIn(
+            platform=row["platform"],
+            external_id=row["external_id"],
+            group_id=row["group_id"],
+            sender_id=row["sender_id"],
+            sent_at=datetime.fromisoformat(row["sent_at"]),
+            text=row["raw_text"],
+        )
+
+    def list_messages(self, limit: int = 50) -> list[MessageOut]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                MESSAGE_SELECT + " ORDER BY m.id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [_to_message(row) for row in rows]
+
+    def set_message_kind(self, message_id: int, kind: str) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE messages SET kind = ? WHERE id = ?",
+                (kind, message_id),
+            )
 
     def ingest_many(
         self,
@@ -498,6 +599,89 @@ class ActivityRepository:
                 continue
             result.append((activity, state))
         return result
+
+    # ---- 推送订阅与送达记录 ----
+
+    def add_push_subscription(
+        self,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: str | None = None,
+    ) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO push_subscriptions(
+                    endpoint, p256dh, auth, user_agent, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                    p256dh = excluded.p256dh,
+                    auth = excluded.auth,
+                    user_agent = excluded.user_agent
+                """,
+                (endpoint, p256dh, auth, user_agent, _now_iso()),
+            )
+
+    def remove_push_subscription(self, endpoint: str) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM push_subscriptions WHERE endpoint = ?",
+                (endpoint,),
+            )
+            return cursor.rowcount > 0
+
+    def list_push_subscriptions(self) -> list[dict]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM push_subscriptions ORDER BY id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def notification_sent(
+        self,
+        activity_id: int,
+        rule: str,
+        channel: str = "webpush",
+    ) -> bool:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM notifications
+                WHERE activity_id = ? AND rule = ? AND channel = ?
+                """,
+                (activity_id, rule, channel),
+            ).fetchone()
+        return row is not None
+
+    def record_notification(
+        self,
+        activity_id: int,
+        rule: str,
+        channel: str = "webpush",
+        detail: str | None = None,
+    ) -> bool:
+        with self.database.connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO notifications(
+                        activity_id, rule, channel, detail, sent_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (activity_id, rule, channel, detail, _now_iso()),
+                )
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    def list_notifications(self, limit: int = 50) -> list[dict]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM notifications ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_document_by_hash(self, sha256: str) -> DocumentOut | None:
         with self.database.connect() as connection:

@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime
 import hashlib
+import hmac
+import logging
 import os
 from pathlib import Path
+import secrets
+import time
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from zoneinfo import ZoneInfo
 
 from app.config import STATIC_DIR, database_path, upload_directory
+from app import notifier
 from app.documents import (
     ALLOWED_SUFFIXES,
     DocumentBlock,
@@ -35,10 +46,15 @@ from app.schemas import (
     FileUploadOut,
     HealthOut,
     IngestOut,
+    LoginIn,
     MessageIn,
+    MessageOut,
     ModelChoice,
     ModelSettingsOut,
     ModelSettingsUpdate,
+    NotificationOut,
+    PushSubscribe,
+    PushUnsubscribe,
     ReminderOut,
     StatusUpdate,
     TrashActivityOut,
@@ -51,6 +67,32 @@ from app.understanding import (
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+LOGGER = logging.getLogger("banwutong")
+
+SESSION_COOKIE = "bwt_session"
+SESSION_TTL = 30 * 24 * 3600
+
+
+def _session_signature(payload: str, secret: str) -> str:
+    return hmac.new(
+        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def make_session(username: str, secret: str) -> str:
+    payload = f"{username}|{int(time.time()) + SESSION_TTL}"
+    return f"{payload}|{_session_signature(payload, secret)}"
+
+
+def session_is_valid(token: str, username: str, secret: str) -> bool:
+    try:
+        user, expiry, signature = token.rsplit("|", 2)
+        if int(expiry) < time.time():
+            return False
+        expected = _session_signature(f"{user}|{expiry}", secret)
+        return hmac.compare_digest(signature, expected) and user == username
+    except (ValueError, TypeError):
+        return False
 
 
 def create_app(
@@ -68,7 +110,30 @@ def create_app(
         repository.initialize()
         repository.purge_expired()
         selected_upload_dir.mkdir(parents=True, exist_ok=True)
-        yield
+
+        reminder_task: asyncio.Task | None = None
+        enabled = os.getenv("BANWUTONG_REMINDERS_DISABLED", "").lower() not in (
+            "1",
+            "true",
+            "yes",
+        )
+        if enabled:
+
+            async def reminder_loop() -> None:
+                while True:
+                    try:
+                        await asyncio.to_thread(notifier.run_once, repository)
+                    except Exception:  # noqa: BLE001 - 提醒失败不能拖垮服务
+                        LOGGER.exception("提醒循环出错")
+                    await asyncio.sleep(60)
+
+            reminder_task = asyncio.create_task(reminder_loop())
+
+        try:
+            yield
+        finally:
+            if reminder_task is not None:
+                reminder_task.cancel()
 
     app = FastAPI(
         title="班务通 API",
@@ -79,6 +144,62 @@ def create_app(
     app.state.repository = repository
     app.state.upload_dir = selected_upload_dir
     app.state.default_model_provider = default_model_provider
+
+    auth_user = os.getenv("BANWUTONG_AUTH_USER", "").strip()
+    auth_password = os.getenv("BANWUTONG_AUTH_PASSWORD", "").strip()
+    session_secret = (
+        os.getenv("BANWUTONG_AUTH_SECRET", "").strip()
+        or f"{auth_user}:{auth_password}:banwutong"
+    )
+    public_paths = {
+        "/login",
+        "/api/login",
+        "/manifest.json",
+        "/sw.js",
+        "/favicon.ico",
+    }
+
+    def is_loopback_direct(request: Request) -> bool:
+        forwarded = request.headers.get(
+            "cf-connecting-ip"
+        ) or request.headers.get("x-forwarded-for")
+        client_host = request.client.host if request.client else ""
+        host = request.headers.get("host", "").split(":")[0].strip().lower()
+        loopback_host = host in {"127.0.0.1", "localhost", "::1", "[::1]"}
+        return loopback_host and not forwarded and client_host in {"127.0.0.1", "::1"}
+
+    def basic_is_valid(header: str) -> bool:
+        if not header.startswith("Basic "):
+            return False
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return False
+        user, _, password = decoded.partition(":")
+        return secrets.compare_digest(user, auth_user) and secrets.compare_digest(
+            password, auth_password
+        )
+
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        """登录页 + 会话 Cookie；本机直连（机器人转发）始终放行。"""
+        if not auth_user or not auth_password:
+            return await call_next(request)
+        path = request.url.path
+        if path in public_paths or path.startswith("/static/"):
+            return await call_next(request)
+        if is_loopback_direct(request):
+            return await call_next(request)
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if token and session_is_valid(token, auth_user, session_secret):
+            return await call_next(request)
+        if basic_is_valid(request.headers.get("authorization", "")):
+            return await call_next(request)
+        if request.method == "GET" and "text/html" in request.headers.get(
+            "accept", ""
+        ):
+            return RedirectResponse(url="/login", status_code=302)
+        return JSONResponse({"detail": "未登录"}, status_code=401)
 
     def active_provider() -> str:
         requested = (
@@ -141,6 +262,7 @@ def create_app(
 
     @app.post("/api/messages", response_model=IngestOut, status_code=201)
     async def ingest_message(payload: MessageIn) -> IngestOut:
+        now = datetime.now(SHANGHAI)
         blocks = [
             DocumentBlock(
                 locator="message-1",
@@ -151,12 +273,50 @@ def create_app(
         understood = await asyncio.to_thread(
             understand_document,
             blocks,
-            datetime.now(SHANGHAI),
+            now,
+            active_provider(),
+        )
+        # 闲聊/表情只进「群消息流水」，不建事项卡。
+        if understood.kind == "chat":
+            repository.record_message(payload, kind="chat")
+            return IngestOut(disposition="skipped", activity=None)
+        parsed = [item.parsed for item in understood.activities]
+        if not parsed:
+            parsed = [parse_notification(payload.text, now)]
+        results = repository.ingest_many(payload, parsed)
+        disposition, activity = results[0]
+        return IngestOut(disposition=disposition, activity=activity)
+
+    @app.get("/api/messages", response_model=list[MessageOut])
+    def list_messages(
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[MessageOut]:
+        return repository.list_messages(limit)
+
+    @app.post("/api/messages/{message_id}/promote", response_model=IngestOut)
+    async def promote_message(message_id: int) -> IngestOut:
+        payload = repository.message_input(message_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        now = datetime.now(SHANGHAI)
+        blocks = [
+            DocumentBlock(
+                locator="message-1",
+                block_type="paragraph",
+                text=payload.text,
+            )
+        ]
+        understood = await asyncio.to_thread(
+            understand_document,
+            blocks,
+            now,
             active_provider(),
         )
         parsed = [item.parsed for item in understood.activities]
-        results = repository.ingest_many(payload, parsed)
-        disposition, activity = results[0]
+        if not parsed:
+            parsed = [parse_notification(payload.text, now)]
+        disposition, activity = repository.ingest_many(payload, parsed)[0]
+        repository.set_message_kind(message_id, "notice")
         return IngestOut(disposition=disposition, activity=activity)
 
     @app.get("/api/model-settings", response_model=ModelSettingsOut)
@@ -387,6 +547,51 @@ def create_app(
             raise HTTPException(status_code=404, detail="Trashed activity not found")
         return Response(status_code=204)
 
+    @app.get("/api/push/public-key")
+    def push_public_key() -> dict:
+        return {"publicKey": os.getenv("BANWUTONG_VAPID_PUBLIC_KEY", "").strip()}
+
+    @app.post("/api/push/subscribe", status_code=201)
+    def push_subscribe(payload: PushSubscribe, request: Request) -> dict:
+        repository.add_push_subscription(
+            payload.endpoint,
+            payload.keys.p256dh,
+            payload.keys.auth,
+            request.headers.get("user-agent"),
+        )
+        return {
+            "subscribed": True,
+            "count": len(repository.list_push_subscriptions()),
+        }
+
+    @app.post("/api/push/unsubscribe")
+    def push_unsubscribe(payload: PushUnsubscribe) -> dict:
+        return {"removed": repository.remove_push_subscription(payload.endpoint)}
+
+    @app.get("/api/notifications", response_model=list[NotificationOut])
+    def list_notifications(
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[NotificationOut]:
+        return [
+            NotificationOut(**row) for row in repository.list_notifications(limit)
+        ]
+
+    @app.post("/api/notifications/test")
+    def send_test_notification() -> dict:
+        subscriptions = repository.list_push_subscriptions()
+        if not subscriptions:
+            raise HTTPException(status_code=409, detail="还没有已订阅的客户端")
+        payload = {
+            "title": "班务通测试提醒",
+            "body": "如果你看到这条通知，推送链路就是通的。",
+            "url": "/",
+            "tag": "banwutong-test",
+        }
+        sent, dead = notifier.send_web_push(subscriptions, payload)
+        for endpoint in dead:
+            repository.remove_push_subscription(endpoint)
+        return {"sent": sent, "dead": len(dead)}
+
     @app.get("/api/reminders", response_model=list[ReminderOut])
     def list_reminders(
         days: int = Query(default=7, ge=1, le=60),
@@ -396,6 +601,38 @@ def create_app(
             for activity, due_state in repository.reminders(days)
         ]
 
+    @app.get("/login", include_in_schema=False)
+    def login_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "login.html")
+
+    @app.post("/api/login")
+    def login(payload: LoginIn, request: Request) -> Response:
+        if not auth_user or not auth_password:
+            return JSONResponse({"ok": True})
+        if not (
+            secrets.compare_digest(payload.username, auth_user)
+            and secrets.compare_digest(payload.password, auth_password)
+        ):
+            raise HTTPException(status_code=401, detail="账号或密码不对")
+        scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE,
+            make_session(auth_user, session_secret),
+            max_age=SESSION_TTL,
+            httponly=True,
+            samesite="lax",
+            secure=(scheme == "https"),
+            path="/",
+        )
+        return response
+
+    @app.post("/api/logout")
+    def logout() -> Response:
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -403,6 +640,17 @@ def create_app(
     @app.get("/chat", include_in_schema=False)
     def chat_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "chat.html")
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker() -> FileResponse:
+        return FileResponse(
+            STATIC_DIR / "sw.js",
+            media_type="application/javascript",
+            headers={
+                "Service-Worker-Allowed": "/",
+                "Cache-Control": "no-cache",
+            },
+        )
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

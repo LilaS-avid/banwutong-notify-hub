@@ -1,6 +1,7 @@
 const API = "/api";
 let currentStatus = "";
 let currentView = "board";
+let lastSignature = "";
 
 const elements = {
   form: document.querySelector("#message-form"),
@@ -14,6 +15,8 @@ const elements = {
   fileStatus: document.querySelector("#file-status"),
   modelSelect: document.querySelector("#model-provider"),
   modelNote: document.querySelector("#model-note"),
+  pushButton: document.querySelector("#push-enable"),
+  pushNote: document.querySelector("#push-note"),
   openChat: document.querySelector("#open-chat"),
   mobileNav: document.querySelector("#mobile-nav"),
   mobileButtons: [...document.querySelectorAll("[data-mobile-action]")],
@@ -22,6 +25,11 @@ const elements = {
   modelSection: document.querySelector("#model-section"),
   chatDialog: document.querySelector("#chat-dialog"),
   chatFrame: document.querySelector("#chat-frame"),
+  messageSection: document.querySelector("#message-section"),
+  messageList: document.querySelector("#message-list"),
+  messageToggle: document.querySelector("#message-toggle"),
+  messageLabel: document.querySelector("#message-label"),
+  messageCount: document.querySelector("#message-count"),
   filters: [...document.querySelectorAll(".filter")],
   statusFilters: document.querySelector("#status-filters"),
   trashToggle: document.querySelector("#trash-toggle"),
@@ -233,17 +241,57 @@ function setView(view) {
   elements.trashToggle.classList.toggle("active", showingTrash);
 }
 
-async function refresh() {
+function signatureOf(activities, trash, messages) {
+  const rows = activities.map((item) => `${item.id}:${item.status}:${item.updated_at}`);
+  const removed = trash.map((item) => `${item.id}:${item.updated_at}`);
+  const stream = messages.map((item) => `${item.id}:${item.kind}:${item.activity_id}`);
+  return `${rows.join(",")}#${removed.join(",")}#${stream.join(",")}`;
+}
+
+async function fetchBoard() {
   const query = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : "";
-  const [all, trash, visible] = await Promise.all([
+  const [all, trash, visible, messages] = await Promise.all([
     request("/activities"),
     request("/trash"),
     request(`/activities${query}`),
+    request("/messages?limit=50"),
   ]);
+  return { all, trash, visible, messages };
+}
+
+function messageRow(message) {
+  const isChat = message.kind === "chat";
+  const action = isChat
+    ? `<button type="button" class="text-button" data-action="promote" data-id="${message.id}">提取成卡片</button>`
+    : message.activity_id
+      ? `<button type="button" class="text-button" data-action="locate">看事项卡</button>`
+      : "";
+  return `
+    <article class="message-row ${isChat ? "chat" : "notice"}">
+      <div class="message-meta">
+        <span class="message-badge ${isChat ? "chat" : "notice"}">${isChat ? "闲聊" : "通知"}</span>
+        <time>${escapeHtml(formatTrashTime(message.sent_at))}</time>
+      </div>
+      <p class="message-text">${escapeHtml(message.text)}</p>
+      <div class="message-action">${action}</div>
+    </article>`;
+}
+
+function renderMessages(messages) {
+  elements.messageCount.textContent = messages.length;
+  if (elements.messageList.classList.contains("hidden")) return;
+  elements.messageList.innerHTML = messages.length
+    ? messages.map(messageRow).join("")
+    : `<div class="empty-state">还没有收到任何消息</div>`;
+}
+
+function renderBoard(all, trash, visible, messages) {
+  lastSignature = signatureOf(all, trash, messages);
   elements.metrics.total.textContent = all.length;
   elements.metrics.open.textContent = all.filter((item) => item.status === "open").length;
   elements.metrics.done.textContent = all.filter((item) => item.status === "completed").length;
   elements.trashCount.textContent = trash.length;
+  renderMessages(messages);
   if (currentView === "trash") {
     elements.list.innerHTML = trash.length
       ? trash.map(trashCard).join("")
@@ -253,6 +301,108 @@ async function refresh() {
   elements.list.innerHTML = visible.length
     ? visible.map(activityCard).join("")
     : `<div class="empty-state">${currentStatus ? "这个分类里还没有事项" : "导入一条通知，建立第一张事项卡"}</div>`;
+}
+
+async function refresh() {
+  const { all, trash, visible, messages } = await fetchBoard();
+  renderBoard(all, trash, visible, messages);
+}
+
+// 群消息由后端接收，前端轮询感知变化后再重绘，避免打断正在编辑的卡片。
+function isBusyEditing() {
+  if (elements.chatDialog?.open) return true;
+  const active = document.activeElement;
+  return Boolean(active && elements.list.contains(active) && active.closest("form"));
+}
+
+async function syncIfChanged() {
+  if (document.hidden || isBusyEditing()) return;
+  const data = await fetchBoard();
+  if (signatureOf(data.all, data.trash, data.messages) === lastSignature) return;
+  renderBoard(data.all, data.trash, data.visible, data.messages);
+  elements.status.textContent = "收到新消息，看板已更新。";
+}
+
+function startLiveSync() {
+  window.setInterval(() => {
+    syncIfChanged().catch(() => {});
+  }, 15000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    syncIfChanged().catch(() => {});
+  });
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  try {
+    return await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  } catch (error) {
+    return null;
+  }
+}
+
+async function refreshPushState() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    elements.pushNote.textContent =
+      "当前浏览器不支持推送：Android 用 Chrome / Edge，iOS 需 16.4+ 且先「添加到主屏幕」。";
+    elements.pushButton.disabled = true;
+    return;
+  }
+  const registration = await navigator.serviceWorker.getRegistration("/");
+  const subscription = registration
+    ? await registration.pushManager.getSubscription()
+    : null;
+  if (subscription && Notification.permission === "granted") {
+    elements.pushNote.textContent = "已在当前设备开启，截止前会自动提醒。";
+    elements.pushButton.textContent = "已开启";
+    elements.pushButton.disabled = true;
+  }
+}
+
+async function enablePush() {
+  elements.pushButton.disabled = true;
+  try {
+    const registration = await registerServiceWorker();
+    if (!registration) {
+      throw new Error("Service Worker 注册失败，推送需要 HTTPS 或 localhost");
+    }
+    if (Notification.permission === "denied") {
+      elements.pushNote.textContent = "通知权限已被拒绝，请到浏览器站点设置里重新允许。";
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      elements.pushNote.textContent = "没有拿到通知权限，提醒未开启。";
+      return;
+    }
+    const { publicKey } = await request("/push/public-key");
+    if (!publicKey) throw new Error("服务端还没配置 VAPID 公钥");
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    const result = await request("/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(subscription),
+    });
+    elements.pushNote.textContent = `已开启，${result.count} 台设备会收到提醒。`;
+    elements.pushButton.textContent = "已开启";
+  } catch (error) {
+    elements.pushNote.textContent = error.message;
+    elements.pushButton.disabled = false;
+  }
 }
 
 async function loadModelSettings() {
@@ -282,7 +432,11 @@ async function submitMessage(event) {
       }),
     });
     elements.status.textContent =
-      result.disposition === "duplicate" ? "这条消息已经处理过。" : "已保存并生成事项。";
+      result.disposition === "duplicate"
+        ? "这条消息已经处理过。"
+        : result.disposition === "skipped"
+          ? "已存入群消息流水（判定为闲聊，没有建卡）。"
+          : "已保存并生成事项。";
     elements.text.value = "";
     await refresh();
   } catch (error) {
@@ -293,9 +447,46 @@ async function submitMessage(event) {
 }
 
 elements.form.addEventListener("submit", submitMessage);
+elements.pushButton.addEventListener("click", enablePush);
 elements.sample.addEventListener("click", () => {
   elements.text.value = sample;
   elements.text.focus();
+});
+
+elements.messageToggle.addEventListener("click", async () => {
+  const next = elements.messageToggle.getAttribute("aria-expanded") !== "true";
+  elements.messageToggle.setAttribute("aria-expanded", String(next));
+  elements.messageToggle.classList.toggle("active", next);
+  elements.messageLabel.textContent = next ? "收起" : "展开";
+  elements.messageList.classList.toggle("hidden", !next);
+  if (!next) return;
+  try {
+    renderMessages(await request("/messages?limit=50"));
+  } catch (error) {
+    elements.messageList.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  }
+});
+
+elements.messageList.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  if (button.dataset.action === "locate") {
+    elements.boardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "提取中…";
+  try {
+    await request(`/messages/${button.dataset.id}/promote`, { method: "POST" });
+    await refresh();
+  } catch (error) {
+    button.textContent = error.message;
+    window.setTimeout(() => {
+      button.textContent = original;
+      button.disabled = false;
+    }, 2500);
+  }
 });
 
 elements.modelSelect.addEventListener("change", async () => {
@@ -506,10 +697,15 @@ elements.list.addEventListener("submit", async (event) => {
   }
 });
 
-refresh().catch((error) => {
-  elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
-});
+refresh()
+  .then(() => startLiveSync())
+  .catch((error) => {
+    elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  });
 loadModelSettings().catch((error) => {
   elements.modelNote.textContent = error.message;
 });
+registerServiceWorker()
+  .then(() => refreshPushState())
+  .catch(() => {});
 
