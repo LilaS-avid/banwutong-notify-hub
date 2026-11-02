@@ -70,6 +70,7 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 LOGGER = logging.getLogger("banwutong")
 
 SESSION_COOKIE = "bwt_session"
+GUEST_COOKIE = "bwt_guest"
 SESSION_TTL = 30 * 24 * 3600
 
 
@@ -180,26 +181,50 @@ def create_app(
             password, auth_password
         )
 
+    def is_authenticated(request: Request) -> bool:
+        if not auth_user or not auth_password:
+            return True
+        if is_loopback_direct(request):
+            return True
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if token and session_is_valid(token, auth_user, session_secret):
+            return True
+        return basic_is_valid(request.headers.get("authorization", ""))
+
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
-        """登录页 + 会话 Cookie；本机直连（机器人转发）始终放行。"""
+        """登录 + 访客只读；本机直连（机器人转发）始终放行。"""
         if not auth_user or not auth_password:
             return await call_next(request)
         path = request.url.path
         if path in public_paths or path.startswith("/static/"):
             return await call_next(request)
-        if is_loopback_direct(request):
+        if is_authenticated(request):
             return await call_next(request)
-        token = request.cookies.get(SESSION_COOKIE, "")
-        if token and session_is_valid(token, auth_user, session_secret):
+        guest = (
+            request.cookies.get(GUEST_COOKIE) == "1"
+            or request.query_params.get("guest") == "1"
+        )
+        # 访客只能读，外加「导入通知」这一个写入口（走本地规则，不花云端额度）。
+        if guest and request.method in {"GET", "HEAD", "OPTIONS"}:
             return await call_next(request)
-        if basic_is_valid(request.headers.get("authorization", "")):
+        if (
+            request.cookies.get(GUEST_COOKIE) == "1"
+            and request.method == "POST"
+            and path in {"/api/messages", "/api/files"}
+        ):
+            return await call_next(request)
+        if request.method in {"GET", "HEAD", "OPTIONS"} and path.startswith("/api/"):
+            # 未登录也能看到只读接口，但首页仍然先去登录页
             return await call_next(request)
         if request.method == "GET" and "text/html" in request.headers.get(
             "accept", ""
         ):
             return RedirectResponse(url="/login", status_code=302)
-        return JSONResponse({"detail": "未登录"}, status_code=401)
+        return JSONResponse(
+            {"detail": "登录后才能修改", "code": "login_required"},
+            status_code=401,
+        )
 
     def active_provider() -> str:
         requested = (
@@ -211,6 +236,12 @@ def create_app(
         if requested == "cloud" and not teleai_provider_available():
             return "rules"
         return requested
+
+    def provider_for(request: Request) -> str:
+        """访客只能用本地规则，登录用户才按设置上云端模型。"""
+        if not is_authenticated(request):
+            return "rules"
+        return active_provider()
 
     def model_settings() -> ModelSettingsOut:
         cloud_model = os.getenv("BANWUTONG_LLM_MODEL", "").strip()
@@ -261,7 +292,7 @@ def create_app(
         return HealthOut(status="ok", service="banwutong")
 
     @app.post("/api/messages", response_model=IngestOut, status_code=201)
-    async def ingest_message(payload: MessageIn) -> IngestOut:
+    async def ingest_message(payload: MessageIn, request: Request) -> IngestOut:
         now = datetime.now(SHANGHAI)
         blocks = [
             DocumentBlock(
@@ -274,7 +305,7 @@ def create_app(
             understand_document,
             blocks,
             now,
-            active_provider(),
+            provider_for(request),
         )
         # 闲聊/表情只进「群消息流水」，不建事项卡。
         if understood.kind == "chat":
@@ -289,8 +320,12 @@ def create_app(
 
     @app.get("/api/messages", response_model=list[MessageOut])
     def list_messages(
+        request: Request,
         limit: int = Query(default=50, ge=1, le=200),
     ) -> list[MessageOut]:
+        # 群消息流水含原始群聊内容，只给登录用户看。
+        if not is_authenticated(request):
+            raise HTTPException(status_code=403, detail="群消息流水仅登录用户可见")
         return repository.list_messages(limit)
 
     @app.post("/api/messages/{message_id}/promote", response_model=IngestOut)
@@ -359,7 +394,9 @@ def create_app(
         return ChatResponse(reply=reply, provider=used_provider)
 
     @app.post("/api/files", response_model=FileUploadOut, status_code=201)
-    async def upload_file(file: UploadFile = File(...)) -> FileUploadOut:
+    async def upload_file(
+        request: Request, file: UploadFile = File(...)
+    ) -> FileUploadOut:
         original_name = safe_original_name(file.filename)
         media_type = file.content_type
         suffix = Path(original_name).suffix.lower()
@@ -400,7 +437,7 @@ def create_app(
 
         extraction = extract_document(target, suffix)
         activities: list[ActivityOut] = []
-        active_model_provider = active_provider()
+        active_model_provider = provider_for(request)
         understanding = await asyncio.to_thread(
             understand_document,
             extraction.blocks,
@@ -601,6 +638,15 @@ def create_app(
             for activity, due_state in repository.reminders(days)
         ]
 
+    @app.get("/api/session")
+    def session_state(request: Request) -> dict:
+        authenticated = is_authenticated(request)
+        return {
+            "authenticated": authenticated,
+            "guest": not authenticated,
+            "auth_required": bool(auth_user and auth_password),
+        }
+
     @app.get("/login", include_in_schema=False)
     def login_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "login.html")
@@ -616,6 +662,7 @@ def create_app(
             raise HTTPException(status_code=401, detail="账号或密码不对")
         scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
         response = JSONResponse({"ok": True})
+        response.delete_cookie(GUEST_COOKIE, path="/")
         response.set_cookie(
             SESSION_COOKIE,
             make_session(auth_user, session_secret),
@@ -634,8 +681,18 @@ def create_app(
         return response
 
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    def index(request: Request, guest: int = 0) -> Response:
+        response = FileResponse(STATIC_DIR / "index.html")
+        if guest == 1:
+            response.set_cookie(
+                GUEST_COOKIE,
+                "1",
+                max_age=SESSION_TTL,
+                httponly=True,
+                samesite="lax",
+                path="/",
+            )
+        return response
 
     @app.get("/chat", include_in_schema=False)
     def chat_page() -> FileResponse:

@@ -1,6 +1,7 @@
 const API = "/api";
 let currentStatus = "";
 let currentView = "board";
+let isGuest = false;
 let lastSignature = "";
 
 const elements = {
@@ -30,6 +31,7 @@ const elements = {
   messageToggle: document.querySelector("#message-toggle"),
   messageLabel: document.querySelector("#message-label"),
   messageCount: document.querySelector("#message-count"),
+  guestBanner: document.querySelector("#guest-banner"),
   filters: [...document.querySelectorAll(".filter")],
   statusFilters: document.querySelector("#status-filters"),
   trashToggle: document.querySelector("#trash-toggle"),
@@ -250,12 +252,14 @@ function signatureOf(activities, trash, messages) {
 
 async function fetchBoard() {
   const query = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : "";
-  const [all, trash, visible, messages] = await Promise.all([
+  const calls = [
     request("/activities"),
     request("/trash"),
     request(`/activities${query}`),
-    request("/messages?limit=50"),
-  ]);
+  ];
+  // 访客看不到群消息流水，连请求都不发。
+  if (!isGuest) calls.push(request("/messages?limit=50"));
+  const [all, trash, visible, messages = []] = await Promise.all(calls);
   return { all, trash, visible, messages };
 }
 
@@ -402,6 +406,19 @@ async function enablePush() {
   } catch (error) {
     elements.pushNote.textContent = error.message;
     elements.pushButton.disabled = false;
+  }
+}
+
+async function loadSession() {
+  try {
+    const session = await request("/session");
+    isGuest = !session.authenticated;
+    document.body.classList.toggle("guest", isGuest);
+    elements.guestBanner.classList.toggle("hidden", !isGuest);
+    return session;
+  } catch (error) {
+    isGuest = false;
+    return { authenticated: true, guest: false };
   }
 }
 
@@ -697,7 +714,8 @@ elements.list.addEventListener("submit", async (event) => {
   }
 });
 
-refresh()
+loadSession()
+  .then(() => refresh())
   .then(() => startLiveSync())
   .catch((error) => {
     elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;

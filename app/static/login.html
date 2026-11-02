@@ -65,6 +65,14 @@
     }
     button:disabled { opacity: 0.6; cursor: default; }
     .status { min-height: 20px; margin-top: 14px; font-size: 13px; color: var(--accent); }
+    .ghost {
+      display: block; margin-top: 14px; padding: 11px 14px;
+      text-align: center; text-decoration: none;
+      color: var(--green); font-size: 14px;
+      border: 1px dashed var(--line); border-radius: 12px;
+      background: rgba(42, 107, 85, 0.04);
+    }
+    .ghost:hover { background: rgba(42, 107, 85, 0.09); }
     .foot { margin-top: 18px; font-size: 12px; color: var(--muted); line-height: 1.6; }
   </style>
 </head>
@@ -84,6 +92,7 @@
       <input id="password" name="password" type="password" autocomplete="current-password" required>
       <button id="submit" type="submit">进入班务通</button>
     </form>
+    <a class="ghost" id="guest-entry" href="/?guest=1">先直接进入（只读，用本地规则）</a>
     <p class="status" id="status" role="status"></p>
     <p class="foot">建议在手机浏览器里「添加到主屏幕」，之后点图标就能直接进班务通。</p>
   </main>
@@ -91,6 +100,14 @@
     const form = document.querySelector("#login-form");
     const status = document.querySelector("#status");
     const submit = document.querySelector("#submit");
+
+    // 已有会话就直接进看板，不用再登一次
+    fetch("/api/session")
+      .then((response) => response.json())
+      .then((session) => {
+        if (session.authenticated) window.location.replace("/");
+      })
+      .catch(() => {});
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
