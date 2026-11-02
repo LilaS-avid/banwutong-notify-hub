@@ -431,6 +431,29 @@ class ActivityRepository:
             ).fetchone()
             return _to_activity(row) if row else None
 
+    def activity_source(self, activity_id: int) -> dict | None:
+        """事项对应的原始消息，用于看板上「查看原文」。"""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT m.id, m.platform, m.group_id, m.sender_id, m.sent_at, m.raw_text
+                FROM activities a
+                JOIN messages m ON m.id = a.source_message_id
+                WHERE a.id = ?
+                """,
+                (activity_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "message_id": row["id"],
+            "platform": row["platform"],
+            "group_id": row["group_id"],
+            "sender_id": row["sender_id"],
+            "sent_at": row["sent_at"],
+            "text": row["raw_text"],
+        }
+
     def set_status(self, activity_id: int, status: str) -> ActivityOut | None:
         now = _now_iso()
         with self.database.connect() as connection:

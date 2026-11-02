@@ -4,15 +4,31 @@ import re
 import threading
 import zipfile
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json"}
 DOCX_SUFFIXES = {".docx"}
+DOC_SUFFIXES = {".doc"}
 PDF_SUFFIXES = {".pdf"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
-ALLOWED_SUFFIXES = TEXT_SUFFIXES | DOCX_SUFFIXES | PDF_SUFFIXES | IMAGE_SUFFIXES
+SPREADSHEET_SUFFIXES = {".xlsx", ".xlsm"}
+SLIDES_SUFFIXES = {".pptx"}
+HTML_SUFFIXES = {".html", ".htm"}
+RTF_SUFFIXES = {".rtf"}
+ALLOWED_SUFFIXES = (
+    TEXT_SUFFIXES
+    | DOCX_SUFFIXES
+    | DOC_SUFFIXES
+    | PDF_SUFFIXES
+    | IMAGE_SUFFIXES
+    | SPREADSHEET_SUFFIXES
+    | SLIDES_SUFFIXES
+    | HTML_SUFFIXES
+    | RTF_SUFFIXES
+)
 OCR_SCORE_THRESHOLD = 0.3
 PDF_RENDER_DPI = 200
 PDF_TEXT_THRESHOLD = 20
@@ -264,17 +280,197 @@ def _text_blocks(text: str, prefix: str = "block") -> list[DocumentBlock]:
     ]
 
 
+def _extract_spreadsheet(path: Path) -> list[DocumentBlock]:
+    """xlsx/xlsm：直接读 zip 里的 XML，不依赖 openpyxl。"""
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(path) as archive:
+        try:
+            shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared = [
+                "".join(node.text or "" for node in item.iter(f"{namespace}t"))
+                for item in shared_root.findall(f"{namespace}si")
+            ]
+        except KeyError:
+            shared = []
+
+        names: list[str] = []
+        try:
+            workbook_root = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+            names = [
+                sheet.get("name") or f"sheet{index}"
+                for index, sheet in enumerate(
+                    workbook_root.iter(f"{namespace}sheet"), start=1
+                )
+            ]
+        except KeyError:
+            pass
+
+        sheet_names = sorted(
+            (
+                name
+                for name in archive.namelist()
+                if re.match(r"xl/worksheets/sheet\d+\.xml$", name)
+            ),
+            key=lambda name: int(re.search(r"(\d+)", name).group(1)),
+        )
+
+        blocks: list[DocumentBlock] = []
+        for index, sheet_name in enumerate(sheet_names, start=1):
+            root = ElementTree.fromstring(archive.read(sheet_name))
+            rows: list[str] = []
+            for row in root.iter(f"{namespace}row"):
+                cells: list[str] = []
+                for cell in row.findall(f"{namespace}c"):
+                    value = cell.find(f"{namespace}v")
+                    if value is not None and value.text is not None:
+                        text = value.text
+                        if cell.get("t") == "s":
+                            try:
+                                text = shared[int(text)]
+                            except (ValueError, IndexError):
+                                pass
+                        cells.append(str(text).strip())
+                        continue
+                    inline = cell.find(f"{namespace}is")
+                    if inline is not None:
+                        text = "".join(
+                            node.text or "" for node in inline.iter(f"{namespace}t")
+                        ).strip()
+                        if text:
+                            cells.append(text)
+                cells = [item for item in cells if item]
+                if cells:
+                    rows.append(" | ".join(cells))
+            if rows:
+                title = names[index - 1] if index - 1 < len(names) else f"sheet{index}"
+                blocks.append(
+                    DocumentBlock(
+                        locator=f"sheet-{index}",
+                        block_type="table",
+                        text=f"[工作表 {title}]\n" + "\n".join(rows),
+                    )
+                )
+    return blocks
+
+
+def _extract_slides(path: Path) -> list[DocumentBlock]:
+    """pptx：直接读 zip 里的 slide XML，不依赖 python-pptx。"""
+    namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    with zipfile.ZipFile(path) as archive:
+        slides = sorted(
+            (
+                name
+                for name in archive.namelist()
+                if re.match(r"ppt/slides/slide\d+\.xml$", name)
+            ),
+            key=lambda name: int(re.search(r"(\d+)", name).group(1)),
+        )
+        blocks: list[DocumentBlock] = []
+        for index, slide_name in enumerate(slides, start=1):
+            root = ElementTree.fromstring(archive.read(slide_name))
+            texts = [
+                node.text.strip()
+                for node in root.iter(f"{namespace}t")
+                if node.text and node.text.strip()
+            ]
+            if texts:
+                blocks.append(
+                    DocumentBlock(
+                        locator=f"slide-{index}",
+                        block_type="paragraph",
+                        text=f"[第 {index} 页]\n" + "\n".join(texts),
+                    )
+                )
+    return blocks
+
+
+class _HtmlTextCollector(HTMLParser):
+    BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "td", "section"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in {"script", "style"}:
+            self.skip_depth += 1
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self.skip_depth:
+            self.skip_depth -= 1
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.skip_depth:
+            self.parts.append(data)
+
+
+def _extract_html(path: Path) -> list[DocumentBlock]:
+    collector = _HtmlTextCollector()
+    collector.feed(_decode_text(path.read_bytes()))
+    collector.close()
+    raw = "".join(collector.parts)
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    return [
+        DocumentBlock(
+            locator=f"html-line-{index}",
+            block_type="paragraph",
+            text=line,
+        )
+        for index, line in enumerate(lines, start=1)
+    ]
+
+
+def _extract_rtf(path: Path) -> list[DocumentBlock]:
+    """rtf：去掉控制字，尽量还原成纯文本。"""
+    raw = path.read_bytes().decode("latin-1", "ignore")
+
+    def _hex_char(match: re.Match[str]) -> str:
+        try:
+            return bytes([int(match.group(1), 16)]).decode("gb18030", "ignore")
+        except ValueError:
+            return ""
+
+    raw = re.sub(r"\\'([0-9a-fA-F]{2})", _hex_char, raw)
+    raw = re.sub(r"\\u(-?\d+)\??", lambda m: chr(int(m.group(1)) % 65536), raw)
+    raw = re.sub(r"\\(?:par|line)\b ?", "\n", raw)
+    raw = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)
+    raw = raw.replace("{", "").replace("}", "")
+    raw = raw.replace("\\\\", "\\").replace("\\{", "{").replace("\\}", "}")
+    return _text_blocks(raw, "rtf-block")
+
+
 def extract_document(path: Path, suffix: str) -> ExtractedDocument:
     normalized_suffix = suffix.lower()
+    note: str | None = None
     try:
         if normalized_suffix in TEXT_SUFFIXES:
             blocks = _text_blocks(_decode_text(path.read_bytes()))
         elif normalized_suffix in DOCX_SUFFIXES:
             blocks = _extract_docx(path)
+        elif normalized_suffix in DOC_SUFFIXES:
+            from app.legacy_doc import extract_doc_text
+
+            text, method = extract_doc_text(path.read_bytes())
+            blocks = _text_blocks(text, "doc-block")
+            if method != "piece-table":
+                note = "旧版 .doc 用兜底扫描提取，可能混入格式噪声，建议核对"
         elif normalized_suffix in PDF_SUFFIXES:
             blocks = _extract_pdf(path)
         elif normalized_suffix in IMAGE_SUFFIXES:
             blocks = _extract_image(path)
+        elif normalized_suffix in SPREADSHEET_SUFFIXES:
+            blocks = _extract_spreadsheet(path)
+        elif normalized_suffix in SLIDES_SUFFIXES:
+            blocks = _extract_slides(path)
+        elif normalized_suffix in HTML_SUFFIXES:
+            blocks = _extract_html(path)
+        elif normalized_suffix in RTF_SUFFIXES:
+            blocks = _extract_rtf(path)
         else:
             raise ValueError("Unsupported file type")
     except Exception as error:
@@ -294,6 +490,6 @@ def extract_document(path: Path, suffix: str) -> ExtractedDocument:
     return ExtractedDocument(
         status="processed",
         text=text,
-        note=None,
+        note=note,
         blocks=blocks,
     )

@@ -97,6 +97,16 @@ def test_image_only_message_is_skipped():
     assert to_message_in(IMAGE_ONLY_EVENT) is None
 
 
+def test_image_only_message_can_be_read_for_attachment_pipeline():
+    # 连接层要拿 external_id / group_id 去处理附件，所以允许「空文字」返回
+    message = to_message_in(IMAGE_ONLY_EVENT, require_text=False)
+
+    assert message is not None
+    assert message["text"] == ""
+    assert message["external_id"] == "msg-abc-003"
+    assert message["group_id"] == "group-openid-01"
+
+
 def test_duplicate_push_keeps_same_external_id():
     # 平台会重复推送同一条消息，external_id 必须稳定，后端才能按它幂等
     first = to_message_in(GROUP_AT_EVENT)

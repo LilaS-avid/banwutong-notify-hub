@@ -55,11 +55,15 @@ def _sender_id(author: dict | None) -> str | None:
     return _get(author, "member_openid", "user_openid", "id")
 
 
-def to_message_in(event: dict) -> dict | None:
+def to_message_in(event: dict, require_text: bool = True) -> dict | None:
     """把一条 QQ 机器人事件转成后端消息体；不支持的事件返回 None。
 
     external_id 使用平台的消息 ID（`d.id`）。平台会重复推送同一条消息，
     后端按 external_id 幂等，所以重复投递不会重复建卡。
+
+    `require_text=False` 时，没有文字但带附件的消息也会返回（`text` 为空串）。
+    机器人连接层靠这个分支去走「附件 → /api/files」的通道；默认仍然跳过，
+    避免纯图片消息在 `/api/messages` 里生成一张叫「[图片]」的垃圾卡片。
     """
     if not isinstance(event, dict):
         return None
@@ -74,9 +78,9 @@ def to_message_in(event: dict) -> dict | None:
         return None
 
     text = _clean_text(_get(payload, "content", "text"))
-    if not text:
-        # 纯图片/附件消息：OCR 还没接进来，现在转成文字只会生成一张叫“[图片]”的垃圾卡片。
-        # 直接跳过，等 OCR 通道接好后再处理（见 docs/qq-bot.md「后续」一节）。
+    if not text and require_text:
+        # 纯图片/附件消息：文字入库只会生成一张叫“[图片]”的垃圾卡片。
+        # 附件由连接层另走 /api/files（见 app/qq_media.py 与 docs/qq-bot.md）。
         return None
 
     is_group = event_type in GROUP_EVENTS

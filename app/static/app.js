@@ -67,6 +67,16 @@ const statusLabels = {
   cancelled: "已取消",
 };
 
+// 与后端 review.py 的 REASON_INFO 对应，只取短标签用于卡片常显。
+const reviewReasonLabels = {
+  deadline_missing: "缺截止时间",
+  deadline_range: "截止取自区间",
+  deadline_conflict: "原文多个日期",
+  title_missing: "标题取自首行",
+  ai_uncertain: "AI 不确定",
+  deadline_mismatch: "AI 与规则不一致",
+};
+
 const mobileViewport = window.matchMedia("(max-width: 760px)");
 
 function updateDeviceLayout() {
@@ -179,8 +189,14 @@ function activityCard(activity) {
     effectiveStatus === "completed"
       ? `<button class="danger-action" type="button" data-action="delete" data-id="${activity.id}">删除</button>`
       : "";
+  const reviewChips = (activity.review_reasons || [])
+    .map(
+      (code) =>
+        `<span class="badge review-chip">${escapeHtml(reviewReasonLabels[code] || code)}</span>`,
+    )
+    .join("");
   const reviewBadge = activity.needs_review
-    ? `<span class="badge review">待核对</span>`
+    ? `<span class="badge review">待核对</span>${reviewChips}`
     : "";
 
   return `
@@ -196,9 +212,11 @@ function activityCard(activity) {
         <div><b>报名材料</b>${escapeHtml(materials)}</div>
         <div><b>地点 / 联系人</b>${escapeHtml([activity.location, activity.contact].filter(Boolean).join(" · ") || "未填写")}</div>
       </div>
+      <div class="source-box hidden" data-source-id="${activity.id}"></div>
       ${editForm(activity)}
       <div class="card-actions">
         ${link}
+        ${isGuest ? "" : `<button type="button" data-action="source" data-id="${activity.id}">查看原文</button>`}
         <button type="button" data-action="edit">编辑内容</button>
         ${statusActions}
         ${deleteAction}
@@ -673,11 +691,11 @@ elements.fileForm.addEventListener("submit", async (event) => {
     } else if (result.activities.length) {
       elements.fileStatus.textContent =
         `文件已保存，并整理了 ${result.activities.length} 个事项。`;
-    } else if (result.document.extract_status === "stored_only") {
-      elements.fileStatus.textContent = "文件已保存；图片 OCR 暂未启用。";
-    } else {
+    } else if (result.document.extract_status === "failed") {
       elements.fileStatus.textContent =
-        result.document.extract_note || "文件已保存，但未提取到文本。";
+        "文件已保存，但没能读出文字。换一张更清楚的图片，或到事项里手动补充。";
+    } else {
+      elements.fileStatus.textContent = "文件已保存，没有识别出新的待办事项。";
     }
     elements.fileForm.reset();
     await refresh();
@@ -738,6 +756,27 @@ elements.list.addEventListener("click", async (event) => {
     const card = button.closest(".activity");
     card.querySelector(".edit-form").classList.remove("hidden");
     card.querySelector("input[name='title']").focus();
+    return;
+  }
+  if (button.dataset.action === "source") {
+    const card = button.closest(".activity");
+    const box = card.querySelector(".source-box");
+    if (!box.classList.contains("hidden")) {
+      box.classList.add("hidden");
+      button.textContent = "查看原文";
+      return;
+    }
+    if (!box.dataset.loaded) {
+      try {
+        const source = await request(`/activities/${button.dataset.id}/source`);
+        box.textContent = source.text;
+        box.dataset.loaded = "1";
+      } catch (error) {
+        box.textContent = error.message;
+      }
+    }
+    box.classList.remove("hidden");
+    button.textContent = "收起原文";
     return;
   }
   if (button.dataset.action === "review-confirm") {

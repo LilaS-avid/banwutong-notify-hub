@@ -439,7 +439,9 @@ def create_app(
         target = selected_upload_dir / stored_name
         target.write_bytes(content)
 
-        extraction = extract_document(target, suffix)
+        # OCR 和 PDF 渲染是纯 CPU 活，放线程里跑，别把事件循环卡住
+        # （机器人上传大文件时，网页端还要能正常响应）
+        extraction = await asyncio.to_thread(extract_document, target, suffix)
         activities: list[ActivityOut] = []
         active_model_provider = provider_for(request)
         understanding = await asyncio.to_thread(
@@ -577,6 +579,16 @@ def create_app(
         if activity is None:
             raise HTTPException(status_code=404, detail="Trashed activity not found")
         return activity
+
+    @app.get("/api/activities/{activity_id}/source")
+    def get_activity_source(activity_id: int, request: Request) -> dict:
+        # 原文属于群聊内容，只给登录用户看。
+        if not is_authenticated(request):
+            raise HTTPException(status_code=403, detail="原文仅登录用户可见")
+        source = repository.activity_source(activity_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="没有找到这张卡片的原文")
+        return source
 
     @app.get("/api/reviews", response_model=list[ReviewItemOut])
     def list_reviews() -> list[ReviewItemOut]:

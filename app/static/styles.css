@@ -997,3 +997,25 @@ body.guest .message-action { display: none; }
 
 .message-action { margin-top: 8px; }
 
+
+/* 卡片上常显的核对原因标签 */
+.badge.review-chip {
+  background: rgba(223, 109, 67, 0.12);
+  color: #8a3d22;
+  font-weight: 400;
+}
+
+/* 卡片上的原文展示 */
+.source-box {
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: rgba(23, 53, 43, 0.04);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
