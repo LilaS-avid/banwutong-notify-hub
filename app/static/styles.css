@@ -107,7 +107,7 @@ h1 {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
   margin: 18px 0;
 }
@@ -387,6 +387,105 @@ textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(42,107,8
 }
 
 .badge.review { color: #9b4d23; background: #fae7d9; }
+
+.review-filter span {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 3px;
+  padding: 1px 5px;
+  color: #9b4d23;
+  background: #fae7d9;
+  border-radius: 999px;
+  font-size: 10px;
+  text-align: center;
+}
+
+.review-filter.active span {
+  color: var(--ink);
+  background: #f7ecdf;
+}
+
+.review-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: #fdf5ec;
+  border: 1px solid #eddcc8;
+  border-radius: 14px;
+}
+
+.review-toolbar-copy { display: grid; gap: 3px; }
+.review-toolbar-copy .kicker { margin: 0; color: #9b4d23; }
+.review-toolbar-copy strong { font-size: 15px; }
+.review-toolbar-copy span { color: var(--muted); font-size: 12px; }
+.review-toolbar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.review-card { border-color: #eddcc8; }
+
+.review-reasons {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-reason {
+  display: grid;
+  gap: 2px;
+  padding: 9px 11px;
+  border-left: 3px solid #d8a273;
+  border-radius: 8px;
+  background: #fdf5ec;
+  font-size: 12px;
+}
+
+.review-reason.blocking {
+  border-left-color: #a6462d;
+  background: #fbeee8;
+}
+
+.review-reason b { font-size: 12px; }
+.review-reason span { color: var(--muted); }
+
+.review-evidence { margin: 12px 0 0; font-size: 12px; }
+
+.review-evidence summary {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.review-evidence pre {
+  margin: 8px 0 0;
+  padding: 11px 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #3d413c;
+  background: #f5f4ef;
+  border-radius: 10px;
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+.review-evidence b {
+  display: block;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.activity-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
 .badge.done { color: #6e746f; background: #ecece9; }
 
 .meta-grid {
@@ -658,7 +757,7 @@ textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(42,107,8
   }
 
   .metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 7px;
     margin: 0 0 10px;
   }

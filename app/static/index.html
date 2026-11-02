@@ -32,6 +32,7 @@
       <section class="metrics" aria-label="事项概览">
         <article><span id="metric-total">0</span><small>全部事项</small></article>
         <article><span id="metric-open">0</span><small>待处理</small></article>
+        <article><span id="metric-review">0</span><small>待核对</small></article>
         <article><span id="metric-done">0</span><small>已完成</small></article>
       </section>
 
@@ -99,6 +100,9 @@
             <div class="view-actions">
               <div class="filters" id="status-filters" role="group" aria-label="筛选事项">
                 <button class="filter active" type="button" data-status="">全部</button>
+                <button class="filter review-filter" type="button" data-status="review">
+                  待核对 <span id="filter-review-count">0</span>
+                </button>
                 <button class="filter" type="button" data-status="open">待处理</button>
                 <button class="filter" type="button" data-status="completed">已完成</button>
               </div>
@@ -116,6 +120,18 @@
           <p class="trash-hint hidden" id="trash-hint">
             删除的事项会保留 7 天，到期后自动彻底删除。
           </p>
+          <div class="review-toolbar hidden" id="review-toolbar">
+            <div class="review-toolbar-copy">
+              <p class="kicker">REVIEW</p>
+              <strong>待核对队列</strong>
+              <span>核对截止时间后，提醒会按修正后的时间发送；未核对也会按时提醒，但会标注【未核对】。</span>
+            </div>
+            <div class="review-toolbar-actions">
+              <button class="primary-button" id="batch-confirm" type="button">
+                批量确认低风险项
+              </button>
+            </div>
+          </div>
           <div id="activity-list" class="activity-list">
             <div class="empty-state">正在读取本机事项……</div>
           </div>

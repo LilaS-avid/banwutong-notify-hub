@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS activities (
     contact TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     needs_review INTEGER NOT NULL DEFAULT 0,
+    review_reasons TEXT NOT NULL DEFAULT '[]',
+    reviewed_at TEXT,
     source_message_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -176,6 +178,36 @@ class Database:
                 connection.execute(
                     "ALTER TABLE activities ADD COLUMN deleted_at TEXT"
                 )
+            # 待核对工作台：原因码与人工确认时间必须落库，
+            # 否则每次改状态都会把人工确认覆盖掉。
+            if "review_reasons" not in activity_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE activities
+                    ADD COLUMN review_reasons TEXT NOT NULL DEFAULT '[]'
+                    """
+                )
+            if "reviewed_at" not in activity_columns:
+                connection.execute(
+                    "ALTER TABLE activities ADD COLUMN reviewed_at TEXT"
+                )
+            connection.execute(
+                """
+                UPDATE activities
+                SET review_reasons = '["deadline_missing"]'
+                WHERE deadline IS NULL
+                  AND reviewed_at IS NULL
+                  AND (review_reasons IS NULL OR review_reasons = '[]')
+                  AND deleted_at IS NULL
+                """
+            )
+            connection.execute(
+                """
+                UPDATE activities
+                SET needs_review = 1
+                WHERE deadline IS NULL AND reviewed_at IS NULL
+                """
+            )
             message_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(messages)")

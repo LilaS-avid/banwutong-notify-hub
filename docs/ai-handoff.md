@@ -70,3 +70,37 @@ python -m pytest tests/test_dedupe.py -v     # 看 15 条去重用例的明细
 - 改了 3 处纯规则 + 1 个依赖，都配了测试，本地全绿
 - 有 3 个已知缺陷留在 `xfail` 里，原因写清楚了
 - 剩下的最大缺口不是去重，是**提醒根本不会发**
+
+---
+
+## 七、待核对工作台（2026-11-02 合并进来）
+
+截止时间解析错一次，提醒就错一次。所以关键字段可疑的事项会先进「待核对」队列，人工看一眼再放行。
+
+**数据**
+
+- `activities` 新增 `review_reasons`（原因码数组）和 `reviewed_at`；旧库启动时自动加列并回填。
+- 原因码定义在 `app/review.py`：`deadline_missing`（阻塞）、`deadline_range`、`deadline_conflict`、`title_missing`、`ai_uncertain`、`deadline_mismatch`。
+- `needs_review` 变成落库状态，不再由 `deadline is None` 推导。`PATCH /api/activities/{id}` 改状态**不会**再覆盖它。
+- 新通知如果改了截止时间，`reviewed_at` 清空、事项重新进队列。
+
+**接口**
+
+- `GET /api/reviews`、`GET /api/activities/{id}/review`
+- `POST /api/activities/{id}/confirm`（可带 `edits` 顺手修正）
+- `POST /api/reviews/batch-confirm`（只放行无阻塞原因的事项）
+
+**云端模型自评**
+
+解析提示词要求模型额外输出 `needs_review`：
+
+- `false` → 解除区间/多日期/标题/不一致等歧义原因，**但 `deadline_missing` 不豁免**；
+- `true` → 追加 `ai_uncertain`；
+- 字段缺失或不是布尔 → 维持原有保守判断，换模型不会突然放水。
+
+程序还会拿规则版对同一段 evidence 做交叉验证，两边截止时间差超过 1 天记 `deadline_mismatch`。
+
+**提醒**
+
+`app/notifier.py` 是唯一的调度器：Web Push（7 天 / 24 小时 / 3 小时 / 当天 8 点）+ 可选 Webhook + 可选 SMTP。
+未核对的事项照常按时间发，但标题带 `【未核对】`、正文首行提示可能不准确。

@@ -9,12 +9,18 @@ from zoneinfo import ZoneInfo
 from app.db import Database
 from app.documents import DocumentBlock
 from app.parser import ParsedActivity, normalise_key
+from app.review import describe_reasons, has_blocking_reason, sanitise_reasons
 from app.schemas import (
+    ActivityConfirm,
     ActivityEdit,
     ActivityOut,
     DocumentBlockOut,
     DocumentOut,
     MessageIn,
+    ReviewBatchOut,
+    ReviewEvidenceOut,
+    ReviewItemOut,
+    ReviewSkipOut,
     MessageOut,
     TrashActivityOut,
 )
@@ -36,6 +42,15 @@ FROM messages m
 """
 
 
+PLATFORM_LABELS = {
+    "manual": "手动导入",
+    "qq": "QQ 群消息",
+    "wecom": "企业微信",
+    "email": "邮件",
+    "file": "上传文件",
+}
+
+
 def _now_iso() -> str:
     return datetime.now(SHANGHAI).isoformat()
 
@@ -52,6 +67,8 @@ def _to_activity(row) -> ActivityOut:
         contact=row["contact"],
         status=row["status"],
         needs_review=bool(row["needs_review"]),
+        review_reasons=list(json.loads(row["review_reasons"] or "[]")),
+        reviewed_at=row["reviewed_at"],
         source_message_id=row["source_message_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -295,13 +312,26 @@ class ActivityRepository:
                     "contact": parsed.contact or existing["contact"],
                 }
                 status = "cancelled" if parsed.change_type == "cancel" else "open"
-                merged["needs_review"] = int(merged["deadline"] is None)
+                reasons = [
+                    code
+                    for code in parsed.review_reasons
+                    if code != "deadline_missing"
+                ]
+                if merged["deadline"] is None:
+                    reasons.insert(0, "deadline_missing")
+                reasons = sanitise_reasons(reasons)
+                reviewed_at = existing["reviewed_at"]
+                if reviewed_at and existing["deadline"] != merged["deadline"]:
+                    # 截止时间被新通知改写，原来的人工确认不再成立。
+                    reviewed_at = None
+                merged["needs_review"] = int(bool(reasons) and reviewed_at is None)
                 connection.execute(
                     """
                     UPDATE activities
                     SET audience = ?, deadline = ?, location = ?, materials = ?,
                         registration_url = ?, contact = ?, status = ?,
-                        needs_review = ?, source_message_id = ?, updated_at = ?
+                        needs_review = ?, review_reasons = ?, reviewed_at = ?,
+                        source_message_id = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -313,6 +343,8 @@ class ActivityRepository:
                         merged["contact"],
                         status,
                         merged["needs_review"],
+                        json.dumps(reasons, ensure_ascii=False),
+                        reviewed_at,
                         message_id,
                         now,
                         existing["id"],
@@ -322,13 +354,14 @@ class ActivityRepository:
                 disposition = "updated"
             else:
                 status = "cancelled" if parsed.change_type == "cancel" else "open"
+                reasons = sanitise_reasons(list(parsed.review_reasons))
                 cursor = connection.execute(
                     """
                     INSERT INTO activities(
                         dedupe_key, title, audience, deadline, location, materials,
                         registration_url, contact, status, needs_review,
-                        source_message_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        review_reasons, source_message_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         parsed.dedupe_key,
@@ -340,7 +373,8 @@ class ActivityRepository:
                         parsed.registration_url,
                         parsed.contact,
                         status,
-                        int(parsed.needs_review),
+                        int(bool(reasons)),
+                        json.dumps(reasons, ensure_ascii=False),
                         message_id,
                         now,
                         now,
@@ -403,9 +437,7 @@ class ActivityRepository:
             cursor = connection.execute(
                 """
                 UPDATE activities
-                SET status = ?,
-                    needs_review = CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
-                    updated_at = ?
+                SET status = ?, updated_at = ?
                 WHERE id = ? AND deleted_at IS NULL
                 """,
                 (status, now, activity_id),
@@ -423,9 +455,100 @@ class ActivityRepository:
         activity_id: int,
         payload: ActivityEdit,
     ) -> ActivityOut | None:
+        with self.database.connect() as connection:
+            return self._write_details(connection, activity_id, payload)
+
+    def _write_details(
+        self,
+        connection,
+        activity_id: int,
+        payload: ActivityEdit,
+    ) -> ActivityOut | None:
         now = _now_iso()
         deadline = payload.deadline.isoformat() if payload.deadline else None
         key = normalise_key(payload.title) or "unnamed"
+        existing = connection.execute(
+            """
+            SELECT id, reviewed_at FROM activities
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (activity_id,),
+        ).fetchone()
+        if existing is None:
+            return None
+        # 人工改过字段后只保留结构性判断：原文层的区间/多日期歧义
+        # 已由这次人工输入消解，不再重复报警。
+        reasons: list[str] = []
+        if deadline is None:
+            reasons.append("deadline_missing")
+        if key == "unnamed":
+            reasons.append("title_missing")
+        try:
+            connection.execute(
+                """
+                UPDATE activities
+                SET dedupe_key = ?, title = ?, audience = ?, deadline = ?,
+                    location = ?, materials = ?, registration_url = ?,
+                    contact = ?, needs_review = ?, review_reasons = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    key,
+                    payload.title,
+                    payload.audience,
+                    deadline,
+                    payload.location,
+                    json.dumps(payload.materials, ensure_ascii=False),
+                    payload.registration_url,
+                    payload.contact,
+                    int(bool(reasons) and existing["reviewed_at"] is None),
+                    json.dumps(reasons, ensure_ascii=False),
+                    now,
+                    activity_id,
+                ),
+            )
+        except Exception as error:
+            if "UNIQUE constraint failed" in str(error):
+                raise ValueError("Another activity already uses this title") from error
+            raise
+        row = connection.execute(
+            "SELECT * FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()
+        return _to_activity(row)
+
+    def review_queue(self) -> list[ReviewItemOut]:
+        """待核对队列：需要人工确认且未删除的事项，缺截止时间的排最前。"""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM activities
+                WHERE deleted_at IS NULL
+                  AND needs_review = 1
+                  AND status IN ('open', 'cancelled')
+                ORDER BY
+                    CASE WHEN deadline IS NULL THEN 0 ELSE 1 END,
+                    deadline ASC,
+                    id DESC
+                """
+            ).fetchall()
+            return [self._to_review_item(connection, row) for row in rows]
+
+    def get_review(self, activity_id: int) -> ReviewItemOut | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM activities WHERE id = ? AND deleted_at IS NULL",
+                (activity_id,),
+            ).fetchone()
+            return self._to_review_item(connection, row) if row else None
+
+    def confirm_activity(
+        self,
+        activity_id: int,
+        payload: ActivityConfirm,
+    ) -> ReviewItemOut | None:
+        now = _now_iso()
         with self.database.connect() as connection:
             existing = connection.execute(
                 "SELECT id FROM activities WHERE id = ? AND deleted_at IS NULL",
@@ -433,38 +556,114 @@ class ActivityRepository:
             ).fetchone()
             if existing is None:
                 return None
-            try:
-                connection.execute(
-                    """
-                    UPDATE activities
-                    SET dedupe_key = ?, title = ?, audience = ?, deadline = ?,
-                        location = ?, materials = ?, registration_url = ?,
-                        contact = ?, needs_review = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        key,
-                        payload.title,
-                        payload.audience,
-                        deadline,
-                        payload.location,
-                        json.dumps(payload.materials, ensure_ascii=False),
-                        payload.registration_url,
-                        payload.contact,
-                        int(deadline is None),
-                        now,
-                        activity_id,
-                    ),
-                )
-            except Exception as error:
-                if "UNIQUE constraint failed" in str(error):
-                    raise ValueError("Another activity already uses this title") from error
-                raise
+            if payload.edits is not None:
+                if self._write_details(connection, activity_id, payload.edits) is None:
+                    return None
+            connection.execute(
+                """
+                UPDATE activities
+                SET needs_review = 0, reviewed_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, activity_id),
+            )
             row = connection.execute(
                 "SELECT * FROM activities WHERE id = ?",
                 (activity_id,),
             ).fetchone()
-            return _to_activity(row)
+            return self._to_review_item(connection, row)
+
+    def confirm_many(self, activity_ids: list[int]) -> ReviewBatchOut:
+        """批量确认低风险事项；带 blocking 原因的会被跳过并回传。"""
+        now = _now_iso()
+        confirmed: list[int] = []
+        skipped: list[ReviewSkipOut] = []
+        with self.database.connect() as connection:
+            for activity_id in dict.fromkeys(activity_ids):
+                row = connection.execute(
+                    "SELECT * FROM activities WHERE id = ? AND deleted_at IS NULL",
+                    (activity_id,),
+                ).fetchone()
+                if row is None:
+                    skipped.append(
+                        ReviewSkipOut(
+                            activity_id=activity_id,
+                            reasons=["activity_not_found"],
+                        )
+                    )
+                    continue
+                reasons = list(json.loads(row["review_reasons"] or "[]"))
+                if not row["needs_review"]:
+                    confirmed.append(activity_id)
+                    continue
+                if has_blocking_reason(reasons):
+                    skipped.append(
+                        ReviewSkipOut(
+                            activity_id=activity_id,
+                            reasons=sanitise_reasons(reasons),
+                        )
+                    )
+                    continue
+                connection.execute(
+                    """
+                    UPDATE activities
+                    SET needs_review = 0, reviewed_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, activity_id),
+                )
+                confirmed.append(activity_id)
+        return ReviewBatchOut(confirmed=confirmed, skipped=skipped)
+
+    def _to_review_item(self, connection, row) -> ReviewItemOut:
+        activity = _to_activity(row)
+        return ReviewItemOut(
+            activity=activity,
+            reasons=describe_reasons(activity.review_reasons),
+            evidence=self._evidence_for(connection, row),
+        )
+
+    def _evidence_for(self, connection, row) -> list[ReviewEvidenceOut]:
+        evidence: list[ReviewEvidenceOut] = []
+        message = connection.execute(
+            "SELECT platform, raw_text FROM messages WHERE id = ?",
+            (row["source_message_id"],),
+        ).fetchone()
+        if message is not None:
+            evidence.append(
+                ReviewEvidenceOut(
+                    kind="message",
+                    label=PLATFORM_LABELS.get(
+                        message["platform"],
+                        str(message["platform"]),
+                    ),
+                    text=str(message["raw_text"])[:4_000],
+                )
+            )
+        quotes = connection.execute(
+            """
+            SELECT d.original_name, m.quote
+            FROM activity_mentions m
+            JOIN documents d ON d.id = m.document_id
+            WHERE m.activity_id = ?
+            ORDER BY m.id
+            """,
+            (row["id"],),
+        ).fetchall()
+        seen: set[str] = set()
+        for quote in quotes:
+            text = str(quote["quote"])
+            if text in seen:
+                continue
+            seen.add(text)
+            evidence.append(
+                ReviewEvidenceOut(
+                    kind="document",
+                    label=str(quote["original_name"]),
+                    text=text,
+                )
+            )
+        return evidence
 
     def soft_delete(self, activity_id: int) -> TrashActivityOut | None:
         now = datetime.now(SHANGHAI)
