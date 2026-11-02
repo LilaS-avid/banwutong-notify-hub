@@ -162,3 +162,67 @@ def test_push_endpoints(tmp_path) -> None:
 
         no_subs = client.post("/api/notifications/test")
         assert no_subs.status_code == 409
+
+
+class ChannelRepository:
+    """按渠道去重的假仓储，用于多渠道测试。"""
+
+    def __init__(self, activities, subscriptions=None) -> None:
+        self.activities = activities
+        self.subscriptions = subscriptions or []
+        self.records: set[tuple[int, str, str]] = set()
+        self.removed: list[str] = []
+
+    def list_activities(self):
+        return self.activities
+
+    def list_push_subscriptions(self):
+        return self.subscriptions
+
+    def notification_sent(self, activity_id, rule, channel="webpush"):
+        return (activity_id, rule, channel) in self.records
+
+    def record_notification(self, activity_id, rule, channel="webpush", detail=None):
+        key = (activity_id, rule, channel)
+        if key in self.records:
+            return False
+        self.records.add(key)
+        return True
+
+    def remove_push_subscription(self, endpoint):
+        self.removed.append(endpoint)
+        return True
+
+
+def test_payload_marks_unreviewed_activity(monkeypatch) -> None:
+    activity = make_activity()
+    activity.needs_review = True
+    activity.review_reasons = ["deadline_missing"]
+    deadline = datetime.fromisoformat(activity.deadline).astimezone(SHANGHAI)
+    now = datetime(2026, 11, 2, 9, 0, tzinfo=SHANGHAI)
+
+    payload = notifier.build_payload(activity, "24h", deadline, now)
+
+    assert payload["title"] == "【未核对】截止提醒：英语四级报名"
+    assert "尚未人工核对" in payload["body"]
+
+
+def test_webhook_channel_sends_without_push_subscription(monkeypatch) -> None:
+    monkeypatch.setenv("BANWUTONG_REMINDER_WEBHOOK_URL", "https://hook.example/notify")
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        notifier.httpx,
+        "post",
+        lambda url, **kwargs: sent.append(kwargs["json"]) or type(
+            "R", (), {"raise_for_status": lambda self: None}
+        )(),
+    )
+    repo = ChannelRepository([make_activity()])
+    now = datetime(2026, 11, 2, 9, 0, tzinfo=SHANGHAI)
+
+    delivered = notifier.run_once(repo, now)
+
+    assert [item["channel"] for item in delivered] == ["webhook"]
+    assert sent and sent[0]["title"] == "截止提醒：英语四级报名"
+    # 同一活动同一规则只发一次
+    assert notifier.run_once(repo, now) == []

@@ -1,6 +1,7 @@
 const API = "/api";
 let currentStatus = "";
 let currentView = "board";
+let reviewItems = [];
 let isGuest = false;
 let lastSignature = "";
 
@@ -40,9 +41,13 @@ const elements = {
   trashHint: document.querySelector("#trash-hint"),
   viewTitle: document.querySelector("#view-title"),
   viewKicker: document.querySelector("#view-kicker"),
+  reviewToolbar: document.querySelector("#review-toolbar"),
+  batchConfirm: document.querySelector("#batch-confirm"),
+  filterReviewCount: document.querySelector("#filter-review-count"),
   metrics: {
     total: document.querySelector("#metric-total"),
     open: document.querySelector("#metric-open"),
+    review: document.querySelector("#metric-review"),
     done: document.querySelector("#metric-done"),
   },
 };
@@ -123,9 +128,10 @@ function formatTrashTime(value) {
   }).format(new Date(value));
 }
 
-function editForm(activity) {
+function editForm(activity, options = {}) {
+  const confirmMode = options.confirm === true;
   return `
-    <form class="edit-form hidden" data-edit-id="${activity.id}">
+    <form class="edit-form hidden" data-edit-id="${activity.id}" data-confirm="${confirmMode ? "1" : "0"}">
       <div class="edit-grid">
         <label class="edit-field wide">标题
           <input name="title" required maxlength="200" value="${escapeHtml(activity.title)}">
@@ -151,7 +157,7 @@ function editForm(activity) {
       </div>
       <div class="edit-actions">
         <button type="button" data-action="cancel-edit">取消</button>
-        <button class="save-edit" type="submit">保存修改</button>
+        <button class="save-edit" type="submit">${confirmMode ? "保存并确认" : "保存修改"}</button>
       </div>
     </form>`;
 }
@@ -173,12 +179,16 @@ function activityCard(activity) {
     effectiveStatus === "completed"
       ? `<button class="danger-action" type="button" data-action="delete" data-id="${activity.id}">删除</button>`
       : "";
+  const reviewBadge = activity.needs_review
+    ? `<span class="badge review">待核对</span>`
+    : "";
 
   return `
     <article class="activity">
       <div class="activity-top">
         <h3>${escapeHtml(activity.title)}</h3>
         <span class="badge ${badgeClass}">${statusLabels[effectiveStatus] || escapeHtml(effectiveStatus)}</span>
+        ${reviewBadge}
       </div>
       <div class="meta-grid">
         <div><b>截止时间</b>${escapeHtml(formatDeadline(activity.deadline))}</div>
@@ -214,6 +224,57 @@ function trashCard(activity) {
     </article>`;
 }
 
+function reviewCard(item) {
+  const activity = item.activity;
+  const materials = activity.materials.length
+    ? activity.materials.join("、")
+    : "未从通知中识别";
+  const reasons = item.reasons
+    .map(
+      (reason) => `
+      <li class="review-reason ${escapeHtml(reason.severity)}">
+        <b>${escapeHtml(reason.label)}</b>
+        <span>${escapeHtml(reason.hint)}</span>
+      </li>`,
+    )
+    .join("");
+  const evidence = item.evidence
+    .map(
+      (entry) => `
+      <b>${escapeHtml(entry.label)}</b>
+      <pre>${escapeHtml(entry.text)}</pre>`,
+    )
+    .join("");
+
+  return `
+    <article class="activity review-card" data-activity-id="${activity.id}">
+      <div class="activity-top">
+        <h3>${escapeHtml(activity.title)}</h3>
+        <div class="activity-badges">
+          <span class="badge review">待核对</span>
+          <span class="badge">${statusLabels[activity.status] || escapeHtml(activity.status)}</span>
+        </div>
+      </div>
+      <ul class="review-reasons">${reasons}</ul>
+      <div class="meta-grid">
+        <div><b>当前截止时间</b>${escapeHtml(formatDeadline(activity.deadline))}</div>
+        <div><b>适用对象</b>${escapeHtml(activity.audience || "未填写")}</div>
+        <div><b>报名材料</b>${escapeHtml(materials)}</div>
+        <div><b>地点 / 联系人</b>${escapeHtml([activity.location, activity.contact].filter(Boolean).join(" · ") || "未填写")}</div>
+      </div>
+      <details class="review-evidence">
+        <summary>查看原文证据</summary>
+        ${evidence || "<b>没有可追溯的原文</b>"}
+      </details>
+      ${editForm(activity, { confirm: true })}
+      <div class="card-actions">
+        <button type="button" data-action="review-edit">修正字段</button>
+        <button class="save-edit" type="button" data-action="review-confirm" data-id="${activity.id}">确认无误</button>
+        <button type="button" data-action="status" data-status="ignored" data-id="${activity.id}">暂时忽略</button>
+      </div>
+    </article>`;
+}
+
 async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) {
@@ -234,33 +295,50 @@ async function request(path, options = {}) {
 function setView(view) {
   currentView = view;
   const showingTrash = currentView === "trash";
+  const showingReview = !showingTrash && currentStatus === "review";
   elements.statusFilters.classList.toggle("hidden", showingTrash);
   elements.trashHint.classList.toggle("hidden", !showingTrash);
-  elements.viewTitle.textContent = showingTrash ? "事项回收站" : "事项看板";
-  elements.viewKicker.textContent = showingTrash ? "TRASH · 保留 7 天" : "INBOX";
+  elements.reviewToolbar.classList.toggle("hidden", !showingReview);
+  elements.viewTitle.textContent = showingTrash
+    ? "事项回收站"
+    : showingReview
+      ? "待核对工作台"
+      : "事项看板";
+  elements.viewKicker.textContent = showingTrash
+    ? "TRASH · 保留 7 天"
+    : showingReview
+      ? "REVIEW · 需人工确认"
+      : "INBOX";
   elements.trashLabel.textContent = showingTrash ? "返回看板" : "回收站";
   elements.trashToggle.setAttribute("aria-expanded", String(showingTrash));
   elements.trashToggle.classList.toggle("active", showingTrash);
 }
 
-function signatureOf(activities, trash, messages) {
+function signatureOf(activities, trash, messages, reviews = []) {
   const rows = activities.map((item) => `${item.id}:${item.status}:${item.updated_at}`);
   const removed = trash.map((item) => `${item.id}:${item.updated_at}`);
   const stream = messages.map((item) => `${item.id}:${item.kind}:${item.activity_id}`);
-  return `${rows.join(",")}#${removed.join(",")}#${stream.join(",")}`;
+  const review = reviews.map(
+    (item) => `${item.activity.id}:${item.activity.updated_at}`,
+  );
+  return `${rows.join(",")}#${removed.join(",")}#${stream.join(",")}#${review.join(",")}`;
 }
 
 async function fetchBoard() {
-  const query = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : "";
+  const query =
+    currentStatus && currentStatus !== "review"
+      ? `?status=${encodeURIComponent(currentStatus)}`
+      : "";
   const calls = [
     request("/activities"),
     request("/trash"),
     request(`/activities${query}`),
+    request("/reviews"),
   ];
   // 访客看不到群消息流水，连请求都不发。
   if (!isGuest) calls.push(request("/messages?limit=50"));
-  const [all, trash, visible, messages = []] = await Promise.all(calls);
-  return { all, trash, visible, messages };
+  const [all, trash, visible, reviews, messages = []] = await Promise.all(calls);
+  return { all, trash, visible, reviews, messages };
 }
 
 function messageRow(message) {
@@ -289,11 +367,14 @@ function renderMessages(messages) {
     : `<div class="empty-state">还没有收到任何消息</div>`;
 }
 
-function renderBoard(all, trash, visible, messages) {
-  lastSignature = signatureOf(all, trash, messages);
+function renderBoard(all, trash, visible, messages, reviews = []) {
+  reviewItems = reviews;
+  lastSignature = signatureOf(all, trash, messages, reviews);
   elements.metrics.total.textContent = all.length;
   elements.metrics.open.textContent = all.filter((item) => item.status === "open").length;
+  elements.metrics.review.textContent = reviews.length;
   elements.metrics.done.textContent = all.filter((item) => item.status === "completed").length;
+  elements.filterReviewCount.textContent = reviews.length;
   elements.trashCount.textContent = trash.length;
   renderMessages(messages);
   if (currentView === "trash") {
@@ -302,14 +383,20 @@ function renderBoard(all, trash, visible, messages) {
       : `<div class="empty-state">回收站是空的</div>`;
     return;
   }
+  if (currentStatus === "review") {
+    elements.list.innerHTML = reviews.length
+      ? reviews.map(reviewCard).join("")
+      : `<div class="empty-state">没有待核对事项，解析结果可以直接使用。</div>`;
+    return;
+  }
   elements.list.innerHTML = visible.length
     ? visible.map(activityCard).join("")
     : `<div class="empty-state">${currentStatus ? "这个分类里还没有事项" : "导入一条通知，建立第一张事项卡"}</div>`;
 }
 
 async function refresh() {
-  const { all, trash, visible, messages } = await fetchBoard();
-  renderBoard(all, trash, visible, messages);
+  const { all, trash, visible, reviews, messages } = await fetchBoard();
+  renderBoard(all, trash, visible, messages, reviews);
 }
 
 // 群消息由后端接收，前端轮询感知变化后再重绘，避免打断正在编辑的卡片。
@@ -322,8 +409,8 @@ function isBusyEditing() {
 async function syncIfChanged() {
   if (document.hidden || isBusyEditing()) return;
   const data = await fetchBoard();
-  if (signatureOf(data.all, data.trash, data.messages) === lastSignature) return;
-  renderBoard(data.all, data.trash, data.visible, data.messages);
+  if (signatureOf(data.all, data.trash, data.messages, data.reviews) === lastSignature) return;
+  renderBoard(data.all, data.trash, data.visible, data.messages, data.reviews);
   elements.status.textContent = "收到新消息，看板已更新。";
 }
 
@@ -605,10 +692,36 @@ elements.filters.forEach((button) => {
   button.addEventListener("click", () => {
     currentStatus = button.dataset.status;
     elements.filters.forEach((item) => item.classList.toggle("active", item === button));
+    setView("board");
     refresh().catch((error) => {
       elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     });
   });
+});
+
+elements.batchConfirm.addEventListener("click", async () => {
+  const ids = reviewItems
+    .filter((item) => !item.reasons.some((reason) => reason.severity === "blocking"))
+    .map((item) => item.activity.id);
+  if (!ids.length) {
+    elements.status.textContent = "没有可以批量确认的低风险事项，请逐条核对。";
+    return;
+  }
+  elements.batchConfirm.disabled = true;
+  try {
+    const result = await request("/reviews/batch-confirm", {
+      method: "POST",
+      body: JSON.stringify({ activity_ids: ids }),
+    });
+    elements.status.textContent = result.skipped.length
+      ? `已确认 ${result.confirmed.length} 项，还有 ${result.skipped.length} 项需要逐条核对。`
+      : `已确认 ${result.confirmed.length} 项。`;
+    await refresh();
+  } catch (error) {
+    elements.status.textContent = error.message;
+  } finally {
+    elements.batchConfirm.disabled = false;
+  }
 });
 
 elements.trashToggle.addEventListener("click", () => {
@@ -621,10 +734,25 @@ elements.trashToggle.addEventListener("click", () => {
 elements.list.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
-  if (button.dataset.action === "edit") {
+  if (button.dataset.action === "edit" || button.dataset.action === "review-edit") {
     const card = button.closest(".activity");
     card.querySelector(".edit-form").classList.remove("hidden");
     card.querySelector("input[name='title']").focus();
+    return;
+  }
+  if (button.dataset.action === "review-confirm") {
+    button.disabled = true;
+    try {
+      await request(`/activities/${button.dataset.id}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      elements.status.textContent = "已确认，提醒会按当前截止时间发送。";
+      await refresh();
+    } catch (error) {
+      elements.status.textContent = error.message;
+      button.disabled = false;
+    }
     return;
   }
   if (button.dataset.action === "cancel-edit") {
@@ -694,19 +822,28 @@ elements.list.addEventListener("submit", async (event) => {
       .split(/[、,，;；\n]+/)
       .map((item) => item.trim())
       .filter(Boolean);
-    await request(`/activities/${form.dataset.editId}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        title: data.get("title"),
-        deadline: data.get("deadline") || null,
-        audience: data.get("audience") || null,
-        materials,
-        location: data.get("location") || null,
-        contact: data.get("contact") || null,
-        registration_url: data.get("registration_url") || null,
-      }),
-    });
-    elements.status.textContent = "事项内容已更新。";
+    const payload = {
+      title: data.get("title"),
+      deadline: data.get("deadline") || null,
+      audience: data.get("audience") || null,
+      materials,
+      location: data.get("location") || null,
+      contact: data.get("contact") || null,
+      registration_url: data.get("registration_url") || null,
+    };
+    if (form.dataset.confirm === "1") {
+      await request(`/activities/${form.dataset.editId}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ edits: payload }),
+      });
+      elements.status.textContent = "已保存修正并确认，提醒会按新截止时间发送。";
+    } else {
+      await request(`/activities/${form.dataset.editId}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      elements.status.textContent = "事项内容已更新。";
+    }
     await refresh();
   } catch (error) {
     elements.status.textContent = error.message;

@@ -472,3 +472,213 @@ def test_existing_database_is_migrated_for_trash(tmp_path) -> None:
         }
     assert "deleted_at" in columns
 
+
+
+# --- 待核对工作台 -------------------------------------------------------
+
+
+def _notice_without_deadline() -> str:
+    return "志愿者招募\n地点：大学生活动中心"
+
+
+def _notice_conflict_first() -> str:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    first = now + timedelta(hours=3)
+    second = now + timedelta(days=7)
+    return (
+        "消防演练安排\n"
+        f"{first:%Y-%m-%d %H:%M} 在教学楼集合，"
+        f"补演安排在 {second:%Y-%m-%d %H:%M}"
+    )
+
+
+def _notice_conflict_second() -> str:
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    first = now + timedelta(hours=8)
+    second = now + timedelta(days=9)
+    return (
+        "消防演练安排\n"
+        f"{first:%Y-%m-%d %H:%M} 在教学楼集合，"
+        f"补演安排在 {second:%Y-%m-%d %H:%M}"
+    )
+
+
+def test_review_queue_lists_missing_deadline_with_evidence(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        client.post(
+            "/api/messages",
+            json={"external_id": "review-missing", "text": _notice_without_deadline()},
+        )
+
+        reviews = client.get("/api/reviews").json()
+
+        assert len(reviews) == 1
+        item = reviews[0]
+        assert item["activity"]["needs_review"] is True
+        assert [reason["code"] for reason in item["reasons"]] == ["deadline_missing"]
+        assert item["reasons"][0]["severity"] == "blocking"
+        assert item["evidence"][0]["kind"] == "message"
+        assert "志愿者招募" in item["evidence"][0]["text"]
+
+
+def test_review_queue_flags_conflicting_dates(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        client.post(
+            "/api/messages",
+            json={"external_id": "review-conflict", "text": _notice_conflict_first()},
+        )
+
+        reviews = client.get("/api/reviews").json()
+
+        assert len(reviews) == 1
+        item = reviews[0]
+        assert item["activity"]["deadline"] is not None
+        assert "deadline_conflict" in [reason["code"] for reason in item["reasons"]]
+
+
+def test_confirm_with_corrected_deadline(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        activity_id = client.post(
+            "/api/messages",
+            json={"external_id": "review-confirm", "text": _notice_without_deadline()},
+        ).json()["activity"]["id"]
+
+        deadline = (
+            datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(hours=5)
+        ).isoformat()
+        confirmed = client.post(
+            f"/api/activities/{activity_id}/confirm",
+            json={
+                "edits": {
+                    "title": "志愿者招募",
+                    "deadline": deadline,
+                    "audience": "大一学生",
+                    "materials": ["报名表"],
+                    "location": "大学生活动中心",
+                    "contact": None,
+                    "registration_url": None,
+                }
+            },
+        )
+
+        assert confirmed.status_code == 200
+        review = confirmed.json()
+        assert review["activity"]["needs_review"] is False
+        assert review["activity"]["reviewed_at"] is not None
+        assert review["activity"]["deadline"] == datetime.fromisoformat(
+            deadline
+        ).astimezone(ZoneInfo("Asia/Shanghai")).isoformat()
+        assert client.get("/api/reviews").json() == []
+
+
+def test_confirmed_review_survives_status_change(tmp_path) -> None:
+    """确认状态不能被“标记完成/重新打开”这类操作覆盖掉。"""
+    with make_client(tmp_path) as client:
+        activity_id = client.post(
+            "/api/messages",
+            json={"external_id": "review-sticky", "text": _notice_without_deadline()},
+        ).json()["activity"]["id"]
+        client.post(f"/api/activities/{activity_id}/confirm", json={})
+
+        client.patch(f"/api/activities/{activity_id}", json={"status": "completed"})
+        reopened = client.patch(
+            f"/api/activities/{activity_id}",
+            json={"status": "open"},
+        ).json()
+
+        assert reopened["needs_review"] is False
+        assert client.get("/api/reviews").json() == []
+
+
+def test_batch_confirm_skips_blocking_items(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        blocking_id = client.post(
+            "/api/messages",
+            json={"external_id": "batch-blocking", "text": _notice_without_deadline()},
+        ).json()["activity"]["id"]
+        warning_id = client.post(
+            "/api/messages",
+            json={"external_id": "batch-warning", "text": _notice_conflict_first()},
+        ).json()["activity"]["id"]
+
+        result = client.post(
+            "/api/reviews/batch-confirm",
+            json={"activity_ids": [blocking_id, warning_id]},
+        ).json()
+
+        assert result["confirmed"] == [warning_id]
+        assert result["skipped"] == [
+            {"activity_id": blocking_id, "reasons": ["deadline_missing"]}
+        ]
+        remaining = client.get("/api/reviews").json()
+        assert [item["activity"]["id"] for item in remaining] == [blocking_id]
+
+
+def test_changed_deadline_reopens_review(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        client.post(
+            "/api/messages",
+            json={"external_id": "reopen-1", "text": _notice_conflict_first()},
+        )
+        activity_id = client.get("/api/reviews").json()[0]["activity"]["id"]
+        client.post(f"/api/activities/{activity_id}/confirm", json={})
+        assert client.get("/api/reviews").json() == []
+
+        client.post(
+            "/api/messages",
+            json={"external_id": "reopen-2", "text": _notice_conflict_second()},
+        )
+
+        reviews = client.get("/api/reviews").json()
+        assert [item["activity"]["id"] for item in reviews] == [activity_id]
+        assert reviews[0]["activity"]["reviewed_at"] is None
+
+
+def test_legacy_database_backfills_review_reasons(tmp_path) -> None:
+    db_path = tmp_path / "legacy-review.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                group_id TEXT,
+                sender_id TEXT,
+                sent_at TEXT NOT NULL,
+                raw_text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(platform, external_id)
+            );
+            CREATE TABLE activities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dedupe_key TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                audience TEXT,
+                deadline TEXT,
+                location TEXT,
+                materials TEXT NOT NULL DEFAULT '[]',
+                registration_url TEXT,
+                contact TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                source_message_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO messages(
+                platform, external_id, sent_at, raw_text, created_at
+            ) VALUES ('manual', 'legacy-1', '2026-10-01T10:00:00+08:00', '旧通知', '2026-10-01T10:00:00+08:00');
+            INSERT INTO activities(
+                dedupe_key, title, deadline, materials, status, needs_review,
+                source_message_id, created_at, updated_at
+            ) VALUES ('旧事项', '旧事项', NULL, '[]', 'open', 1, 1,
+                      '2026-10-01T10:00:00+08:00', '2026-10-01T10:00:00+08:00');
+            """
+        )
+
+    with TestClient(create_app(db_path, tmp_path / "uploads")) as client:
+        reviews = client.get("/api/reviews").json()
+
+    assert len(reviews) == 1
+    assert [reason["code"] for reason in reviews[0]["reasons"]] == ["deadline_missing"]

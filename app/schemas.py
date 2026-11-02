@@ -31,6 +31,8 @@ class ActivityOut(BaseModel):
     contact: str | None
     status: str
     needs_review: bool
+    review_reasons: list[str] = Field(default_factory=list)
+    reviewed_at: str | None = None
     source_message_id: int
     created_at: str
     updated_at: str
@@ -142,6 +144,43 @@ class ActivityEdit(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+
+class ReviewReasonOut(BaseModel):
+    code: str
+    label: str
+    severity: Literal["blocking", "warning"]
+    hint: str
+
+
+class ReviewEvidenceOut(BaseModel):
+    kind: Literal["message", "document"]
+    label: str
+    text: str
+
+
+class ReviewItemOut(BaseModel):
+    activity: ActivityOut
+    reasons: list[ReviewReasonOut]
+    evidence: list[ReviewEvidenceOut]
+
+
+class ActivityConfirm(BaseModel):
+    edits: ActivityEdit | None = None
+
+
+class ReviewBatchConfirm(BaseModel):
+    activity_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class ReviewSkipOut(BaseModel):
+    activity_id: int
+    reasons: list[str]
+
+
+class ReviewBatchOut(BaseModel):
+    confirmed: list[int]
+    skipped: list[ReviewSkipOut]
 
 
 class ReminderOut(BaseModel):

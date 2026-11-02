@@ -11,8 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import smtplib
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from zoneinfo import ZoneInfo
+
+import httpx
 
 from app.repository import ActivityRepository
 from app.schemas import ActivityOut
@@ -58,12 +62,16 @@ def build_payload(
     deadline: datetime,
     now: datetime,
 ) -> dict:
+    mark = "【未核对】" if activity.needs_review else ""
+    body = (
+        f"{deadline.strftime('%m月%d日 %H:%M')} 截止，{_remaining_text(deadline, now)}。"
+        f"{('材料：' + '、'.join(activity.materials)) if activity.materials else ''}"
+    ).strip()
+    if activity.needs_review:
+        body = "注意：此截止时间尚未人工核对，可能不准确。\n" + body
     return {
-        "title": f"截止提醒：{activity.title}",
-        "body": (
-            f"{deadline.strftime('%m月%d日 %H:%M')} 截止，{_remaining_text(deadline, now)}。"
-            f"{('材料：' + '、'.join(activity.materials)) if activity.materials else ''}"
-        ).strip(),
+        "title": f"{mark}截止提醒：{activity.title}",
+        "body": body,
         "url": "/",
         "tag": f"activity-{activity.id}-{rule}",
         "activity_id": activity.id,
@@ -113,6 +121,90 @@ def send_web_push(subscriptions: list[dict], payload: dict) -> tuple[int, list[s
     return sent, dead
 
 
+def _webhook_settings() -> tuple[str, str]:
+    return (
+        os.getenv("BANWUTONG_REMINDER_WEBHOOK_URL", "").strip(),
+        os.getenv("BANWUTONG_REMINDER_WEBHOOK_TOKEN", "").strip(),
+    )
+
+
+def _send_webhook(activity: ActivityOut, payload: dict) -> None:
+    url, token = _webhook_settings()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    response = httpx.post(
+        url,
+        headers=headers,
+        json={
+            "type": "banwutong.reminder",
+            "title": payload["title"],
+            "text": payload["body"],
+            "activity": activity.model_dump(),
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
+def _smtp_ready() -> bool:
+    return bool(
+        os.getenv("BANWUTONG_SMTP_HOST", "").strip()
+        and os.getenv("BANWUTONG_SMTP_FROM", "").strip()
+        and os.getenv("BANWUTONG_SMTP_TO", "").strip()
+    )
+
+
+def _send_email(payload: dict) -> None:
+    host = os.getenv("BANWUTONG_SMTP_HOST", "").strip()
+    port = int(os.getenv("BANWUTONG_SMTP_PORT", "587") or 587)
+    user = os.getenv("BANWUTONG_SMTP_USER", "").strip()
+    password = os.getenv("BANWUTONG_SMTP_PASSWORD", "")
+    sender = os.getenv("BANWUTONG_SMTP_FROM", "").strip()
+    recipients = [
+        item.strip()
+        for item in os.getenv("BANWUTONG_SMTP_TO", "").split(",")
+        if item.strip()
+    ]
+    use_ssl = os.getenv("BANWUTONG_SMTP_USE_SSL", str(port == 465)).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    message = EmailMessage()
+    message["Subject"] = payload["title"]
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content(payload["body"])
+
+    client = (
+        smtplib.SMTP_SSL(host, port, timeout=15)
+        if use_ssl
+        else smtplib.SMTP(host, port, timeout=15)
+    )
+    with client:
+        client.ehlo()
+        if not use_ssl:
+            client.starttls()
+            client.ehlo()
+        if user:
+            client.login(user, password)
+        client.send_message(message)
+
+
+def _channel_names(subscriptions: list[dict]) -> list[str]:
+    """Web Push 有订阅就尝试；VAPID 缺失会由发送环节报错。Webhook、邮件只看环境变量。"""
+    channels: list[str] = []
+    if subscriptions:
+        channels.append("webpush")
+    if _webhook_settings()[0]:
+        channels.append("webhook")
+    if _smtp_ready():
+        channels.append("email")
+    return channels
+
+
 def run_once(
     repository: ActivityRepository,
     now: datetime | None = None,
@@ -120,7 +212,8 @@ def run_once(
     """扫描一次，把到点的提醒发出去。返回本次发出的记录。"""
     current = (now or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
     subscriptions = repository.list_push_subscriptions()
-    if not subscriptions:
+    channels = _channel_names(subscriptions)
+    if not channels:
         return []
 
     delivered: list[dict] = []
@@ -135,32 +228,62 @@ def run_once(
         due = [
             (rule, trigger)
             for rule, trigger, grace in triggers_for(deadline)
-            if current >= trigger
-            and current - trigger <= grace
-            and not repository.notification_sent(activity.id, rule)
+            if current >= trigger and current - trigger <= grace
         ]
         if not due:
             continue
         # 同时到点的多条规则只发最近的一条，其余记为 suppressed，避免同一分钟连发。
         due.sort(key=lambda item: item[1], reverse=True)
-        rule, _ = due[0]
-        payload = build_payload(activity, rule, deadline, current)
-        sent, dead = send_web_push(subscriptions, payload)
-        for endpoint in dead:
-            repository.remove_push_subscription(endpoint)
-        if sent:
-            for name, _trigger in due:
+
+        for channel in channels:
+            pending = [
+                item
+                for item in due
+                if not repository.notification_sent(
+                    activity.id,
+                    item[0],
+                    channel,
+                )
+            ]
+            if not pending:
+                continue
+            rule = pending[0][0]
+            payload = build_payload(activity, rule, deadline, current)
+            detail = "ok"
+            try:
+                if channel == "webpush":
+                    sent, dead = send_web_push(subscriptions, payload)
+                    for endpoint in dead:
+                        repository.remove_push_subscription(endpoint)
+                    detail = f"ok={sent}"
+                    if sent == 0:
+                        continue
+                elif channel == "webhook":
+                    _send_webhook(activity, payload)
+                else:
+                    _send_email(payload)
+            except Exception as error:  # noqa: BLE001 - 单渠道失败不影响其他渠道
+                LOGGER.warning(
+                    "提醒发送失败 activity=%s channel=%s error=%s",
+                    activity.id,
+                    channel,
+                    type(error).__name__,
+                )
+                continue
+            for name, _trigger in pending:
                 repository.record_notification(
                     activity.id,
                     name,
-                    detail=f"ok={sent}" if name == rule else "suppressed",
+                    channel=channel,
+                    detail=detail if name == rule else "suppressed",
                 )
             delivered.append(
                 {
                     "activity_id": activity.id,
                     "title": activity.title,
                     "rule": rule,
-                    "sent": sent,
+                    "channel": channel,
+                    "sent": 1 if channel != "webpush" else int(detail.split("=")[-1]),
                 }
             )
     return delivered

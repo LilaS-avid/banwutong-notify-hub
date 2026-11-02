@@ -37,6 +37,7 @@ from app.local_models import detect_local_model
 from app.parser import parse_notification
 from app.repository import ActivityRepository
 from app.schemas import (
+    ActivityConfirm,
     ActivityEdit,
     ActivityOut,
     ChatRequest,
@@ -56,6 +57,9 @@ from app.schemas import (
     PushSubscribe,
     PushUnsubscribe,
     ReminderOut,
+    ReviewBatchConfirm,
+    ReviewBatchOut,
+    ReviewItemOut,
     StatusUpdate,
     TrashActivityOut,
 )
@@ -573,6 +577,46 @@ def create_app(
         if activity is None:
             raise HTTPException(status_code=404, detail="Trashed activity not found")
         return activity
+
+    @app.get("/api/reviews", response_model=list[ReviewItemOut])
+    def list_reviews() -> list[ReviewItemOut]:
+        return repository.review_queue()
+
+    @app.get(
+        "/api/activities/{activity_id}/review",
+        response_model=ReviewItemOut,
+    )
+    def get_activity_review(activity_id: int) -> ReviewItemOut:
+        review = repository.get_review(activity_id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        return review
+
+    @app.post(
+        "/api/activities/{activity_id}/confirm",
+        response_model=ReviewItemOut,
+    )
+    def confirm_activity(
+        activity_id: int,
+        payload: ActivityConfirm | None = None,
+    ) -> ReviewItemOut:
+        confirmation = payload or ActivityConfirm()
+        if confirmation.edits and confirmation.edits.deadline:
+            if confirmation.edits.deadline.tzinfo is None:
+                confirmation.edits.deadline = confirmation.edits.deadline.replace(
+                    tzinfo=SHANGHAI
+                )
+        try:
+            review = repository.confirm_activity(activity_id, confirmation)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if review is None:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        return review
+
+    @app.post("/api/reviews/batch-confirm", response_model=ReviewBatchOut)
+    def confirm_reviews_in_batch(payload: ReviewBatchConfirm) -> ReviewBatchOut:
+        return repository.confirm_many(payload.activity_ids)
 
     @app.get("/api/trash", response_model=list[TrashActivityOut])
     def list_trash() -> list[TrashActivityOut]:
