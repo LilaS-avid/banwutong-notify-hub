@@ -42,7 +42,6 @@ const elements = {
   trashCount: document.querySelector("#trash-count"),
   trashHint: document.querySelector("#trash-hint"),
   viewTitle: document.querySelector("#view-title"),
-  viewKicker: document.querySelector("#view-kicker"),
   reviewToolbar: document.querySelector("#review-toolbar"),
   batchConfirm: document.querySelector("#batch-confirm"),
   filterReviewCount: document.querySelector("#filter-review-count"),
@@ -59,7 +58,7 @@ const sample = `活动名称：校园智能体应用创新大赛
 适用对象：全体在校学生
 活动地点：线上提交
 报名材料：报名表、学生证照片、作品说明
-报名链接：https://example.com/register
+报名链接：https://www.hrbmu.edu.cn/
 联系人：学生创新中心`;
 
 const statusLabels = {
@@ -333,11 +332,6 @@ function setView(view) {
     : showingReview
       ? "待核对工作台"
       : "事项看板";
-  elements.viewKicker.textContent = showingTrash
-    ? "TRASH · 保留 7 天"
-    : showingReview
-      ? "REVIEW · 需人工确认"
-      : "INBOX";
   elements.trashLabel.textContent = showingTrash ? "返回看板" : "回收站";
   elements.trashToggle.setAttribute("aria-expanded", String(showingTrash));
   elements.trashToggle.classList.toggle("active", showingTrash);
@@ -399,7 +393,10 @@ function renderMessages(messages) {
 function renderBoard(all, trash, visible, messages, reviews = []) {
   reviewItems = reviews;
   lastSignature = signatureOf(all, trash, messages, reviews);
-  elements.workspace.classList.toggle("is-empty", all.length === 0);
+  elements.workspace.classList.toggle(
+    "is-empty",
+    all.length === 0 && trash.length === 0,
+  );
   elements.metrics.total.textContent = all.length;
   elements.metrics.open.textContent = all.filter((item) => item.status === "open").length;
   elements.metrics.review.textContent = reviews.length;
@@ -978,6 +975,11 @@ window.closeToast = function () {
 
 window.viewUpdateToast = function () {
   window.closeToast();
+  if (elements.workspace.classList.contains("is-empty")) {
+    elements.importSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => elements.text.focus(), 260);
+    return;
+  }
   elements.boardSection.scrollIntoView({ behavior: "smooth", block: "start" });
 };
 

@@ -5,6 +5,7 @@
 /data/
 /tools/
 .playwright-cli/
+.taste-skill/
 
 # Secrets
 .env

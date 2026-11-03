@@ -9,21 +9,39 @@
   <link rel="icon" href="/static/favicon.ico">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20261103-ui3">
+  <link rel="stylesheet" href="/static/styles.css?v=20261103-taste4">
 </head>
 <body>
   <div class="page-shell">
-    <header class="hero" id="home-top">
-      <div>
-        <p class="eyebrow">BANWUTONG · MVP 01</p>
-        <h1>
-          <span class="desktop-title">通知不再沉在群聊里</span>
-          <span class="mobile-title">班务通</span>
-        </h1>
-        <p class="hero-copy">导入一条班级通知，自动整理截止时间、报名材料和事项状态。</p>
+    <header class="app-header" id="home-top">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">通</div>
+        <div class="brand-copy">
+          <h1>班务通</h1>
+          <p class="hero-copy">把班级通知整理成可执行事项</p>
+        </div>
       </div>
-      <div class="hero-mark" aria-hidden="true">通</div>
+      <p class="header-note">通知录入 · 截止提醒 · 事项核对</p>
     </header>
+
+    <div
+      id="update-toast"
+      class="toast-container"
+      role="status"
+      aria-live="polite"
+      aria-hidden="true"
+      inert
+    >
+      <div class="toast-content">
+        <div class="toast-icon" aria-hidden="true">新</div>
+        <div class="toast-text">
+          <h4>收到新通知</h4>
+          <p>“哈尔滨医科大学选区投票”有最新更新。</p>
+          <button class="toast-action" type="button" onclick="viewUpdateToast()">处理通知</button>
+        </div>
+        <button class="toast-close" type="button" aria-label="关闭通知" onclick="closeToast()">关闭</button>
+      </div>
+    </div>
 
     <main>
       <p class="guest-banner hidden" id="guest-banner">
@@ -36,35 +54,35 @@
         <article><span id="metric-done">0</span><small>已完成</small></article>
       </section>
 
-      <section class="model-bar" id="model-section" aria-label="模型设置">
-        <div>
-          <p class="kicker">MODEL</p>
-          <strong>通知识别模型</strong>
-          <span id="model-note">正在读取模型配置……</span>
-        </div>
-        <label for="model-provider">
-          <span>当前模型</span>
-          <select id="model-provider" aria-label="选择通知识别模型">
-            <option value="codex">Codex 默认模型</option>
-          </select>
-        </label>
-      </section>
+      <div class="status-strip">
+        <section class="model-bar" id="model-section" aria-label="模型设置">
+          <div>
+            <strong>通知识别模型</strong>
+            <span id="model-note">正在读取模型配置……</span>
+          </div>
+          <label for="model-provider">
+            <span>当前模型</span>
+            <select id="model-provider" aria-label="选择通知识别模型">
+              <option value="codex">Codex 默认模型</option>
+            </select>
+          </label>
+        </section>
 
-      <section class="model-bar" id="push-section" aria-label="截止提醒">
-        <div>
-          <p class="kicker">REMINDER</p>
-          <strong>截止提醒</strong>
-          <span id="push-note">开启后，截止前 7 天 / 24 小时 / 3 小时和当天早上会收到通知。</span>
-        </div>
-        <button class="primary-button" id="push-enable" type="button">开启提醒</button>
-      </section>
+        <section class="model-bar" id="push-section" aria-label="截止提醒">
+          <div>
+            <strong>截止提醒</strong>
+            <span id="push-note">截止前 7 天、24 小时、3 小时和当天早上提醒。</span>
+          </div>
+          <button class="secondary-button" id="push-enable" type="button">开启提醒</button>
+        </section>
+      </div>
 
       <div class="workspace is-empty">
         <section class="composer panel" id="import-section">
           <div class="section-heading">
             <div>
-              <p class="kicker">INGEST</p>
               <h2>导入通知</h2>
+              <p class="section-copy">粘贴群消息或上传文件，自动提取截止时间、材料与下一步。</p>
             </div>
             <button class="text-button" id="sample-button" type="button">填入示例</button>
           </div>
@@ -86,7 +104,7 @@
             >
             <div class="file-footer">
               <span id="file-status">支持 TXT、Markdown、DOCX、PDF 和图片，最大 20 MB。</span>
-              <button class="primary-button" type="submit">上传并解析</button>
+              <button class="secondary-button" type="submit">上传并解析</button>
             </div>
           </form>
         </section>
@@ -94,7 +112,6 @@
         <section class="activity-panel panel" id="board-section">
           <div class="section-heading">
             <div>
-              <p class="kicker" id="view-kicker">INBOX</p>
               <h2 id="view-title">事项看板</h2>
             </div>
             <div class="view-actions">
@@ -122,7 +139,6 @@
           </p>
           <div class="review-toolbar hidden" id="review-toolbar">
             <div class="review-toolbar-copy">
-              <p class="kicker">REVIEW</p>
               <strong>待核对队列</strong>
               <span>核对截止时间后，提醒会按修正后的时间发送；未核对也会按时提醒，但会标注【未核对】。</span>
             </div>
@@ -141,7 +157,6 @@
       <section class="panel message-panel" id="message-section">
         <div class="section-heading">
           <div>
-            <p class="kicker">STREAM</p>
             <h2>群消息流水</h2>
           </div>
           <div class="view-actions">
@@ -166,15 +181,15 @@
   </button>
   <nav class="mobile-nav" id="mobile-nav" aria-label="手机快捷导航">
     <button class="active" type="button" data-mobile-action="board">
-      <span aria-hidden="true">≡</span>
+      <span aria-hidden="true">事</span>
       <small>事项</small>
     </button>
     <button type="button" data-mobile-action="import">
-      <span aria-hidden="true">＋</span>
+      <span aria-hidden="true">入</span>
       <small>导入</small>
     </button>
     <button class="hidden" type="button" data-mobile-action="chat">
-      <span aria-hidden="true">◌</span>
+      <span aria-hidden="true">AI</span>
       <small>AI</small>
     </button>
     <button
@@ -183,7 +198,7 @@
       aria-controls="model-section push-section"
       aria-expanded="false"
     >
-      <span aria-hidden="true">⚙</span>
+      <span aria-hidden="true">设</span>
       <small>设置</small>
     </button>
   </nav>
@@ -195,26 +210,7 @@
       loading="lazy"
     ></iframe>
   </dialog>
-  <script src="/static/app.js?v=20261103-ui" defer></script>
-  <!-- D岗 UI 优化：更新消息提示弹窗 (Toast) -->
-  <div
-    id="update-toast"
-    class="toast-container"
-    role="status"
-    aria-live="polite"
-    aria-hidden="true"
-    inert
-  >
-    <div class="toast-content">
-      <div class="toast-icon">🔔</div>
-      <div class="toast-text">
-        <h4>收到新通知</h4>
-        <p>“哈尔滨医科大学选区投票”有最新更新！</p>
-        <button class="toast-action" type="button" onclick="viewUpdateToast()">查看事项 &rarr;</button>
-      </div>
-      <button class="toast-close" type="button" aria-label="关闭通知" onclick="closeToast()">✕</button>
-    </div>
-  </div>
+  <script src="/static/app.js?v=20261103-taste2" defer></script>
 </body>
 </html>
 

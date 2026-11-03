@@ -4,18 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light only">
-  <meta name="theme-color" content="#12372a">
+  <meta name="theme-color" content="#f3f5f1">
   <title>登录 · 班务通</title>
   <link rel="icon" href="/static/favicon.ico">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <style>
     :root {
-      --ink: #17352b;
-      --muted: #65746d;
-      --paper: #f5f1e8;
-      --line: rgba(23, 53, 43, 0.14);
-      --accent: #df6d43;
-      --green: #2a6b55;
+      --ink: #18211d;
+      --muted: #59655f;
+      --paper: #f3f5f1;
+      --line: #dfe5df;
+      --control-line: #cbd4cc;
+      --accent: #1d5fbf;
+      --green: #25624f;
+      --primary: #1d2420;
+      --danger: #9f3329;
     }
     * { box-sizing: border-box; }
     body {
@@ -25,55 +28,71 @@
       place-items: center;
       padding: 24px;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 12% 10%, rgba(223, 109, 67, 0.16), transparent 26rem),
-        radial-gradient(circle at 88% 78%, rgba(74, 133, 105, 0.18), transparent 28rem),
-        var(--paper);
+      background: var(--paper);
       font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      position: relative;
+      isolation: isolate;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      top: 0;
+      right: 0;
+      width: min(46vw, 680px);
+      height: 100vh;
+      background: #e9eee9;
+      border-radius: 0 0 0 120px;
+      pointer-events: none;
     }
     .card {
       width: min(420px, 100%);
-      background: rgba(255, 253, 248, 0.96);
+      background: #ffffff;
       border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 32px 28px;
-      box-shadow: 0 24px 60px rgba(48, 62, 53, 0.12);
+      border-radius: 18px;
+      padding: 28px;
     }
     .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
     .brand-mark {
-      width: 44px; height: 44px; border-radius: 14px;
+      width: 42px; height: 42px; border-radius: 12px;
       display: grid; place-items: center;
       background: var(--green); color: #fff; font-size: 22px; font-weight: 700;
     }
     .brand strong { font-size: 20px; letter-spacing: 0.04em; }
-    .kicker {
-      margin: 18px 0 6px; font-size: 11px; letter-spacing: 0.22em;
-      text-transform: uppercase; color: var(--muted);
-    }
-    h1 { margin: 0; font-size: 24px; line-height: 1.3; }
-    p.sub { margin: 8px 0 22px; color: var(--muted); font-size: 13px; line-height: 1.6; }
-    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    h1 { margin: 20px 0 0; font-size: 24px; line-height: 1.3; }
+    p.sub { margin: 8px 0 22px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 7px; }
     input {
       width: 100%; padding: 12px 14px; margin-bottom: 16px;
       font: inherit; color: var(--ink);
-      background: #fff; border: 1px solid var(--line); border-radius: 12px;
+      background: #fff; border: 1px solid var(--control-line); border-radius: 12px;
+      transition: border-color 0.18s ease, background 0.18s ease;
     }
+    input:hover { border-color: #aebcb1; }
     input:focus { outline: 2px solid rgba(42, 107, 85, 0.35); outline-offset: 1px; }
     button {
       width: 100%; padding: 13px 16px; font: inherit; font-weight: 600;
-      color: #fff; background: var(--green); border: 0; border-radius: 12px; cursor: pointer;
+      color: #fff; background: var(--primary); border: 0; border-radius: 12px; cursor: pointer;
+      transition: background 0.18s ease, transform 0.18s ease;
     }
+    button:hover:not(:disabled) { background: #313a34; }
+    button:active:not(:disabled) { transform: translateY(1px); }
     button:disabled { opacity: 0.6; cursor: default; }
-    .status { min-height: 20px; margin-top: 14px; font-size: 13px; color: var(--accent); }
+    .status { min-height: 20px; margin-top: 14px; font-size: 13px; color: var(--danger); }
     .ghost {
       display: block; margin-top: 14px; padding: 11px 14px;
       text-align: center; text-decoration: none;
       color: var(--green); font-size: 14px;
-      border: 1px dashed var(--line); border-radius: 12px;
-      background: rgba(42, 107, 85, 0.04);
+      border: 1px solid var(--line); border-radius: 12px;
+      background: var(--paper);
+      transition: background 0.18s ease, border-color 0.18s ease;
     }
-    .ghost:hover { background: rgba(42, 107, 85, 0.09); }
-    .foot { margin-top: 18px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .ghost:hover { background: #e9eeea; border-color: #b8c4bb; }
+    .foot { margin-top: 18px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+    @media (prefers-reduced-motion: reduce) {
+      input, button, .ghost { transition: none; }
+      button:active:not(:disabled) { transform: none; }
+    }
   </style>
 </head>
 <body>
@@ -82,7 +101,6 @@
       <span class="brand-mark" aria-hidden="true">通</span>
       <strong>班务通</strong>
     </div>
-    <p class="kicker">BANWUTONG · SIGN IN</p>
     <h1>登录后查看班级事项</h1>
     <p class="sub">通知、截止时间和报名材料都在这台服务器上，登录才能查看。</p>
     <form id="login-form" autocomplete="on">
