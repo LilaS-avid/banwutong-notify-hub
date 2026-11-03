@@ -9,7 +9,7 @@
   <link rel="icon" href="/static/favicon.ico">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20261103-taste4">
+  <link rel="stylesheet" href="/static/styles.css?v=20261103-workflow1">
 </head>
 <body>
   <div class="page-shell">
@@ -35,8 +35,8 @@
       <div class="toast-content">
         <div class="toast-icon" aria-hidden="true">新</div>
         <div class="toast-text">
-          <h4>收到新通知</h4>
-          <p>“哈尔滨医科大学选区投票”有最新更新。</p>
+          <h4 id="toast-title">收到新通知</h4>
+          <p id="toast-message"></p>
           <button class="toast-action" type="button" onclick="viewUpdateToast()">处理通知</button>
         </div>
         <button class="toast-close" type="button" aria-label="关闭通知" onclick="closeToast()">关闭</button>
@@ -54,27 +54,43 @@
         <article><span id="metric-done">0</span><small>已完成</small></article>
       </section>
 
-      <div class="status-strip">
-        <section class="model-bar" id="model-section" aria-label="模型设置">
-          <div>
-            <strong>通知识别模型</strong>
-            <span id="model-note">正在读取模型配置……</span>
-          </div>
-          <label for="model-provider">
-            <span>当前模型</span>
-            <select id="model-provider" aria-label="选择通知识别模型">
-              <option value="codex">Codex 默认模型</option>
-            </select>
-          </label>
-        </section>
+      <div class="settings-area" id="settings-area">
+        <button
+          class="settings-toggle"
+          id="settings-toggle"
+          type="button"
+          aria-controls="settings-panel"
+          aria-expanded="false"
+        >
+          <span class="settings-toggle-title">处理设置</span>
+          <span id="model-summary">读取模型…</span>
+          <span id="reminder-summary">提醒状态读取中</span>
+          <span class="settings-toggle-action">展开</span>
+        </button>
+        <div class="settings-panel hidden" id="settings-panel">
+          <div class="status-strip">
+            <section class="model-bar" id="model-section" aria-label="模型设置">
+              <div>
+                <strong>通知识别模型</strong>
+                <span id="model-note">正在读取模型配置……</span>
+              </div>
+              <label for="model-provider">
+                <span>当前模型</span>
+                <select id="model-provider" aria-label="选择通知识别模型">
+                  <option value="codex">Codex 默认模型</option>
+                </select>
+              </label>
+            </section>
 
-        <section class="model-bar" id="push-section" aria-label="截止提醒">
-          <div>
-            <strong>截止提醒</strong>
-            <span id="push-note">截止前 7 天、24 小时、3 小时和当天早上提醒。</span>
+            <section class="model-bar" id="push-section" aria-label="截止提醒">
+              <div>
+                <strong>截止提醒</strong>
+                <span id="push-note">截止前 7 天、24 小时、3 小时和当天早上提醒。</span>
+              </div>
+              <button class="secondary-button" id="push-enable" type="button">开启提醒</button>
+            </section>
           </div>
-          <button class="secondary-button" id="push-enable" type="button">开启提醒</button>
-        </section>
+        </div>
       </div>
 
       <div class="workspace is-empty">
@@ -88,7 +104,18 @@
           </div>
           <form id="message-form">
             <label for="message-text">原始通知</label>
-            <textarea id="message-text" required placeholder="粘贴班级群、邮件或公告中的通知……"></textarea>
+            <textarea
+              id="message-text"
+              required
+              aria-describedby="form-status extract-preview"
+              placeholder="粘贴班级群、邮件或公告中的通知……"
+            ></textarea>
+            <section
+              class="extract-preview hidden"
+              id="extract-preview"
+              aria-live="polite"
+              aria-label="通知识别预览"
+            ></section>
             <div class="form-footer">
               <span id="form-status" role="status">消息原文会保留在本机数据库中。</span>
               <button class="primary-button" type="submit">解析并保存</button>
@@ -99,6 +126,7 @@
             <input
               id="file-input"
               type="file"
+              aria-describedby="file-status"
               accept=".txt,.md,.csv,.json,.doc,.docx,.pdf,.png,.jpg,.jpeg,.webp,.xlsx,.xlsm,.pptx,.html,.htm,.rtf"
               required
             >
@@ -113,6 +141,7 @@
           <div class="section-heading">
             <div>
               <h2 id="view-title">事项看板</h2>
+              <p class="board-freshness" id="board-freshness">正在同步本机事项</p>
             </div>
             <div class="view-actions">
               <div class="filters" id="status-filters" role="group" aria-label="筛选事项">
@@ -123,16 +152,32 @@
                 <button class="filter" type="button" data-status="open">待处理</button>
                 <button class="filter" type="button" data-status="completed">已完成</button>
               </div>
-              <button
-                class="trash-toggle"
-                id="trash-toggle"
-                type="button"
-                aria-expanded="false"
-              >
-                <span id="trash-label">回收站</span>
-                <span id="trash-count">0</span>
-              </button>
+              <div class="view-utility">
+                <button
+                  class="trash-toggle"
+                  id="trash-toggle"
+                  type="button"
+                  aria-expanded="false"
+                >
+                  <span id="trash-label">回收站</span>
+                  <span id="trash-count">0</span>
+                </button>
+                <button
+                  class="trash-toggle"
+                  id="bulk-toggle"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  批量处理
+                </button>
+              </div>
             </div>
+          </div>
+          <p class="inline-status hidden" id="board-status" role="status" aria-live="polite"></p>
+          <div class="bulk-actions hidden" id="bulk-actions" aria-live="polite">
+            <span id="bulk-count">已选择 0 项</span>
+            <button class="primary-button" id="bulk-complete" type="button" disabled>标记完成</button>
+            <button class="text-button" id="bulk-cancel" type="button">取消</button>
           </div>
           <p class="trash-hint hidden" id="trash-hint">
             删除的事项会保留 7 天，到期后自动彻底删除。
@@ -195,7 +240,7 @@
     <button
       type="button"
       data-mobile-action="settings"
-      aria-controls="model-section push-section"
+      aria-controls="settings-panel"
       aria-expanded="false"
     >
       <span aria-hidden="true">设</span>
@@ -210,7 +255,7 @@
       loading="lazy"
     ></iframe>
   </dialog>
-  <script src="/static/app.js?v=20261103-taste2" defer></script>
+  <script src="/static/app.js?v=20261103-workflow1" defer></script>
 </body>
 </html>
 

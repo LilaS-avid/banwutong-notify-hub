@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f3f5f1">
   <title>班务通 AI 对话</title>
   <link rel="icon" href="/static/favicon.ico">
-  <link rel="stylesheet" href="/static/styles.css?v=20261103-taste4">
-  <link rel="stylesheet" href="/static/chat.css?v=20261103-taste4">
+  <link rel="stylesheet" href="/static/styles.css?v=20261103-workflow1">
+  <link rel="stylesheet" href="/static/chat.css?v=20261103-workflow1">
 </head>
 <body class="chat-page">
   <div class="chat-shell">
@@ -33,6 +33,7 @@
       <section id="chat-welcome" class="chat-welcome">
         <h2>有什么要问的？</h2>
         <p>我可以结合当前事项，帮你梳理截止时间、材料和下一步行动。</p>
+        <div id="chat-context" class="chat-context hidden" aria-live="polite"></div>
         <div class="prompt-chips">
           <button type="button" data-prompt="最近有哪些事项快截止？">最近有哪些事项快截止？</button>
           <button type="button" data-prompt="帮我按截止时间整理当前事项。">按截止时间整理事项</button>
@@ -57,6 +58,6 @@
       <p>AI 可能会出错，请以原始通知为准。</p>
     </footer>
   </div>
-  <script src="/static/chat.js" defer></script>
+  <script src="/static/chat.js?v=20261103-workflow1" defer></script>
 </body>
 </html>

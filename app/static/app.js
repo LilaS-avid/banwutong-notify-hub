@@ -5,19 +5,34 @@ let reviewItems = [];
 let isGuest = false;
 let lastSignature = "";
 let chatAvailable = false;
+let currentToastActivityId = null;
+let chatReturnFocus = null;
+let lastBoardData = null;
+let previewController = null;
+let previewTimer = null;
+let bulkMode = false;
+const selectedActivityIds = new Set();
 
 const elements = {
   form: document.querySelector("#message-form"),
   text: document.querySelector("#message-text"),
   submit: document.querySelector("#message-form button[type='submit']"),
   status: document.querySelector("#form-status"),
+  preview: document.querySelector("#extract-preview"),
   list: document.querySelector("#activity-list"),
+  boardStatus: document.querySelector("#board-status"),
   sample: document.querySelector("#sample-button"),
   fileForm: document.querySelector("#file-form"),
   fileInput: document.querySelector("#file-input"),
   fileStatus: document.querySelector("#file-status"),
   modelSelect: document.querySelector("#model-provider"),
   modelNote: document.querySelector("#model-note"),
+  modelSummary: document.querySelector("#model-summary"),
+  reminderSummary: document.querySelector("#reminder-summary"),
+  settingsArea: document.querySelector("#settings-area"),
+  settingsToggle: document.querySelector("#settings-toggle"),
+  settingsPanel: document.querySelector("#settings-panel"),
+  settingsToggleAction: document.querySelector(".settings-toggle-action"),
   pushButton: document.querySelector("#push-enable"),
   pushNote: document.querySelector("#push-note"),
   openChat: document.querySelector("#open-chat"),
@@ -35,6 +50,9 @@ const elements = {
   messageLabel: document.querySelector("#message-label"),
   messageCount: document.querySelector("#message-count"),
   guestBanner: document.querySelector("#guest-banner"),
+  toastTitle: document.querySelector("#toast-title"),
+  toastMessage: document.querySelector("#toast-message"),
+  toastAction: document.querySelector(".toast-action"),
   filters: [...document.querySelectorAll(".filter")],
   statusFilters: document.querySelector("#status-filters"),
   trashToggle: document.querySelector("#trash-toggle"),
@@ -42,9 +60,15 @@ const elements = {
   trashCount: document.querySelector("#trash-count"),
   trashHint: document.querySelector("#trash-hint"),
   viewTitle: document.querySelector("#view-title"),
+  boardFreshness: document.querySelector("#board-freshness"),
   reviewToolbar: document.querySelector("#review-toolbar"),
   batchConfirm: document.querySelector("#batch-confirm"),
   filterReviewCount: document.querySelector("#filter-review-count"),
+  bulkToggle: document.querySelector("#bulk-toggle"),
+  bulkBar: document.querySelector("#bulk-actions"),
+  bulkCount: document.querySelector("#bulk-count"),
+  bulkComplete: document.querySelector("#bulk-complete"),
+  bulkCancel: document.querySelector("#bulk-cancel"),
   metrics: {
     total: document.querySelector("#metric-total"),
     open: document.querySelector("#metric-open"),
@@ -85,6 +109,9 @@ function setMobileSettingsOpen(open) {
   const settingsButton = elements.mobileButtons.find(
     (button) => button.dataset.mobileAction === "settings",
   );
+  elements.settingsPanel.classList.toggle("hidden", !open);
+  elements.settingsToggle.setAttribute("aria-expanded", String(open));
+  elements.settingsToggleAction.textContent = open ? "收起" : "展开";
   settingsButton?.setAttribute("aria-expanded", String(open));
 }
 
@@ -148,6 +175,150 @@ function formatTrashTime(value) {
   }).format(new Date(value));
 }
 
+function deadlineInfo(value) {
+  if (!value) {
+    return { state: "missing", text: "未识别截止时间", relative: "待核对" };
+  }
+  const deadline = new Date(value);
+  if (Number.isNaN(deadline.getTime())) {
+    return { state: "missing", text: String(value), relative: "待核对" };
+  }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const targetDay = new Date(
+    deadline.getFullYear(),
+    deadline.getMonth(),
+    deadline.getDate(),
+  );
+  const dayDiff = Math.round((targetDay - today) / 86_400_000);
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(deadline);
+  const date = new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+  }).format(deadline);
+  if (deadline < now) {
+    return {
+      state: "overdue",
+      text: `${date} ${time}`,
+      relative: dayDiff === 0 ? "今天已截止" : `已过 ${Math.abs(dayDiff)} 天`,
+    };
+  }
+  if (dayDiff === 0) {
+    return { state: "today", text: `${date} ${time}`, relative: "今天截止" };
+  }
+  if (dayDiff <= 3) {
+    return {
+      state: "soon",
+      text: `${date} ${time}`,
+      relative: dayDiff === 1 ? "明天截止" : `${dayDiff} 天后截止`,
+    };
+  }
+  return { state: "later", text: `${date} ${time}`, relative: `${dayDiff} 天后` };
+}
+
+function setFormStatus(message, state = "") {
+  elements.status.textContent = message;
+  elements.status.dataset.state = state;
+}
+
+function renderExtractionPreview(data) {
+  if (!data.activities.length || data.kind === "chat") {
+    elements.preview.innerHTML = `
+      <div class="preview-empty">
+        <strong>这段内容更像闲聊</strong>
+        <span>保存后会进入消息流水，不会创建事项卡。</span>
+      </div>`;
+    elements.preview.classList.remove("hidden");
+    return;
+  }
+  const items = data.activities
+    .map((activity) => {
+      const due = deadlineInfo(activity.deadline);
+      const tags = [
+        activity.audience ? `对象：${activity.audience}` : "",
+        activity.location ? `地点：${activity.location}` : "",
+        activity.materials.length
+          ? `材料：${activity.materials.slice(0, 3).join("、")}`
+          : "",
+      ].filter(Boolean);
+      const review = activity.needs_review
+        ? `<span class="preview-review">需要核对 ${activity.review_reasons.length || 1} 项</span>`
+        : `<span class="preview-ready">可保存</span>`;
+      return `
+        <article class="preview-item">
+          <div class="preview-item-top">
+            <h3>${escapeHtml(activity.title || "未命名事项")}</h3>
+            ${review}
+          </div>
+          <div class="preview-facts">
+            <span class="preview-deadline ${due.state}">
+              <b>${escapeHtml(due.relative)}</b>
+              <small>${escapeHtml(due.text)}</small>
+            </span>
+            ${tags
+              .map((tag) => `<span>${escapeHtml(tag)}</span>`)
+              .join("")}
+          </div>
+        </article>`;
+    })
+    .join("");
+  elements.preview.innerHTML = `
+    <div class="preview-heading">
+      <strong>识别预览</strong>
+      <span>${data.activities.length} 个事项 · 本地规则</span>
+    </div>
+    ${items}
+    <p class="preview-note">${escapeHtml(data.note || "")}</p>`;
+  elements.preview.classList.remove("hidden");
+}
+
+function clearExtractionPreview() {
+  window.clearTimeout(previewTimer);
+  previewController?.abort();
+  previewController = null;
+  elements.preview.classList.add("hidden");
+  elements.preview.classList.remove("converting");
+  elements.preview.innerHTML = "";
+}
+
+function scheduleExtractionPreview() {
+  window.clearTimeout(previewTimer);
+  previewController?.abort();
+  previewController = null;
+  const text = elements.text.value.trim();
+  if (text.length < 4) {
+    elements.preview.classList.add("hidden");
+    return;
+  }
+  previewTimer = window.setTimeout(async () => {
+    const controller = new AbortController();
+    previewController = controller;
+    elements.preview.innerHTML =
+      '<div class="preview-loading">正在提取截止时间、材料和下一步…</div>';
+    elements.preview.classList.remove("hidden");
+    try {
+      const data = await request("/preview", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+        signal: controller.signal,
+      });
+      if (!controller.signal.aborted) renderExtractionPreview(data);
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      elements.preview.innerHTML = `
+        <div class="preview-empty error">
+          <strong>暂时无法预览</strong>
+          <span>${escapeHtml(error.message)}。仍可直接保存。</span>
+        </div>`;
+      elements.preview.classList.remove("hidden");
+    }
+  }, 600);
+}
+
 function editForm(activity, options = {}) {
   const confirmMode = options.confirm === true;
   return `
@@ -184,6 +355,7 @@ function editForm(activity, options = {}) {
 
 function activityCard(activity) {
   const effectiveStatus = activity.status;
+  const due = deadlineInfo(activity.deadline);
   const badgeClass = effectiveStatus === "completed" ? "done" : "";
   const materials = activity.materials.length
     ? activity.materials.join("、")
@@ -208,16 +380,35 @@ function activityCard(activity) {
   const reviewBadge = activity.needs_review
     ? `<span class="badge review">待核对</span>${reviewChips}`
     : "";
+  const bulkControl = bulkMode
+    ? `<label class="bulk-check">
+        <input type="checkbox" data-bulk-id="${activity.id}" ${selectedActivityIds.has(activity.id) ? "checked" : ""}>
+        <span class="sr-only">选择 ${escapeHtml(activity.title)}</span>
+      </label>`
+    : "";
+  const titleId = `activity-title-${activity.id}`;
 
   return `
-    <article class="activity">
+    <article
+      class="activity deadline-${due.state}${selectedActivityIds.has(activity.id) ? " selected" : ""}"
+      data-activity-id="${activity.id}"
+      tabindex="-1"
+      aria-labelledby="${titleId}"
+    >
       <div class="activity-top">
-        <h3>${escapeHtml(activity.title)}</h3>
-        <span class="badge ${badgeClass}">${statusLabels[effectiveStatus] || escapeHtml(effectiveStatus)}</span>
-        ${reviewBadge}
+        ${bulkControl}
+        <h3 id="${titleId}">${escapeHtml(activity.title)}</h3>
+        <div class="activity-badges">
+          <span class="badge ${badgeClass}">${statusLabels[effectiveStatus] || escapeHtml(effectiveStatus)}</span>
+          ${reviewBadge}
+        </div>
       </div>
       <div class="meta-grid">
-        <div><b>截止时间</b>${escapeHtml(formatDeadline(activity.deadline))}</div>
+        <div class="deadline-block ${due.state}">
+          <b>截止时间</b>
+          <strong>${escapeHtml(due.relative)}</strong>
+          <small>${escapeHtml(due.text)}</small>
+        </div>
         <div><b>适用对象</b>${escapeHtml(activity.audience || "未填写")}</div>
         <div><b>报名材料</b>${escapeHtml(materials)}</div>
         <div><b>地点 / 联系人</b>${escapeHtml([activity.location, activity.contact].filter(Boolean).join(" · ") || "未填写")}</div>
@@ -337,6 +528,21 @@ function setView(view) {
   elements.trashToggle.classList.toggle("active", showingTrash);
 }
 
+function updateBulkUi() {
+  elements.bulkToggle.classList.toggle("active", bulkMode);
+  elements.bulkToggle.setAttribute("aria-pressed", String(bulkMode));
+  elements.bulkToggle.textContent = bulkMode ? "退出批量" : "批量处理";
+  elements.bulkBar.classList.toggle("hidden", !bulkMode);
+  elements.bulkCount.textContent = `已选择 ${selectedActivityIds.size} 项`;
+  elements.bulkComplete.disabled = selectedActivityIds.size === 0;
+}
+
+function setBulkMode(open) {
+  bulkMode = open;
+  if (!open) selectedActivityIds.clear();
+  updateBulkUi();
+}
+
 function signatureOf(activities, trash, messages, reviews = []) {
   const rows = activities.map((item) => `${item.id}:${item.status}:${item.updated_at}`);
   const removed = trash.map((item) => `${item.id}:${item.updated_at}`);
@@ -390,9 +596,42 @@ function renderMessages(messages) {
     : `<div class="empty-state">还没有收到任何消息</div>`;
 }
 
+function activityGroup(activity) {
+  if (["completed", "ignored", "cancelled"].includes(activity.status)) {
+    return "completed";
+  }
+  return deadlineInfo(activity.deadline).state;
+}
+
+function renderActivityGroups(activities) {
+  const definitions = [
+    ["overdue", "已过截止时间"],
+    ["today", "今天截止"],
+    ["soon", "3 天内截止"],
+    ["later", "之后截止"],
+    ["missing", "待补充截止时间"],
+    ["completed", "已完成或已关闭"],
+  ];
+  return definitions
+    .map(([key, label]) => {
+      const items = activities.filter((item) => activityGroup(item) === key);
+      if (!items.length) return "";
+      return `
+        <section class="board-group" aria-labelledby="group-${key}">
+          <div class="board-group-heading">
+            <h3 id="group-${key}">${label}</h3>
+            <span>${items.length} 项</span>
+          </div>
+          <div class="board-group-list">${items.map(activityCard).join("")}</div>
+        </section>`;
+    })
+    .join("");
+}
+
 function renderBoard(all, trash, visible, messages, reviews = []) {
   reviewItems = reviews;
   lastSignature = signatureOf(all, trash, messages, reviews);
+  lastBoardData = { all, trash, visible, messages, reviews };
   elements.workspace.classList.toggle(
     "is-empty",
     all.length === 0 && trash.length === 0,
@@ -404,6 +643,7 @@ function renderBoard(all, trash, visible, messages, reviews = []) {
   elements.filterReviewCount.textContent = reviews.length;
   elements.trashCount.textContent = trash.length;
   renderMessages(messages);
+  maybeShowMessageNotification(all, messages);
   if (currentView === "trash") {
     elements.list.innerHTML = trash.length
       ? trash.map(trashCard).join("")
@@ -417,13 +657,76 @@ function renderBoard(all, trash, visible, messages, reviews = []) {
     return;
   }
   elements.list.innerHTML = visible.length
-    ? visible.map(activityCard).join("")
+    ? currentStatus
+      ? visible.map(activityCard).join("")
+      : renderActivityGroups(visible)
     : `<div class="empty-state">${currentStatus ? "这个分类里还没有事项" : "导入一条通知，建立第一张事项卡"}</div>`;
 }
 
-async function refresh() {
-  const { all, trash, visible, reviews, messages } = await fetchBoard();
-  renderBoard(all, trash, visible, messages, reviews);
+function focusActivity(activityId, isNew = false) {
+  const card = elements.list.querySelector(
+    `[data-activity-id="${CSS.escape(String(activityId))}"]`,
+  );
+  if (!card) return false;
+  if (isNew) {
+    card.classList.add("activity-new");
+    window.setTimeout(() => card.classList.remove("activity-new"), 1800);
+  }
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  window.setTimeout(() => card.focus({ preventScroll: true }), 260);
+  return true;
+}
+
+function setBoardStatus(message = "", state = "") {
+  elements.boardStatus.classList.toggle("hidden", !message);
+  elements.boardStatus.dataset.state = state;
+  elements.boardStatus.innerHTML = message;
+}
+
+function setBoardFreshness(message, state = "") {
+  elements.boardFreshness.textContent = message;
+  elements.boardFreshness.dataset.state = state;
+}
+
+function renderBoardLoading() {
+  if (lastBoardData) return;
+  elements.list.innerHTML = `
+    <div class="loading-list" aria-label="正在读取事项">
+      <div class="skeleton-row"></div>
+      <div class="skeleton-row"></div>
+      <div class="skeleton-row"></div>
+    </div>`;
+}
+
+async function refresh(options = {}) {
+  if (options.loading) {
+    elements.workspace.classList.remove("is-empty");
+    elements.list.setAttribute("aria-busy", "true");
+    renderBoardLoading();
+  }
+  try {
+    const { all, trash, visible, reviews, messages } = await fetchBoard();
+    renderBoard(all, trash, visible, messages, reviews);
+    setBoardStatus();
+    setBoardFreshness(
+      `更新于 ${new Intl.DateTimeFormat("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(new Date())}`,
+      "ok",
+    );
+  } catch (error) {
+    elements.workspace.classList.remove("is-empty");
+    setBoardStatus(
+      `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+      "error",
+    );
+    setBoardFreshness("数据未能刷新", "error");
+    throw error;
+  } finally {
+    elements.list.removeAttribute("aria-busy");
+  }
 }
 
 // 群消息由后端接收，前端轮询感知变化后再重绘，避免打断正在编辑的卡片。
@@ -443,11 +746,21 @@ async function syncIfChanged() {
 
 function startLiveSync() {
   window.setInterval(() => {
-    syncIfChanged().catch(() => {});
+    syncIfChanged().catch((error) =>
+      setBoardStatus(
+        `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+        "error",
+      ),
+    );
   }, 15000);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
-    syncIfChanged().catch(() => {});
+    syncIfChanged().catch((error) =>
+      setBoardStatus(
+        `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+        "error",
+      ),
+    );
   });
 }
 
@@ -475,6 +788,7 @@ async function refreshPushState() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
     elements.pushNote.textContent =
       "当前浏览器不支持推送：Android 用 Chrome / Edge，iOS 需 16.4+ 且先「添加到主屏幕」。";
+    elements.reminderSummary.textContent = "提醒不可用";
     elements.pushButton.disabled = true;
     return;
   }
@@ -484,8 +798,11 @@ async function refreshPushState() {
     : null;
   if (subscription && Notification.permission === "granted") {
     elements.pushNote.textContent = "已在当前设备开启，截止前会自动提醒。";
+    elements.reminderSummary.textContent = "提醒已开启";
     elements.pushButton.textContent = "已开启";
     elements.pushButton.disabled = true;
+  } else {
+    elements.reminderSummary.textContent = "提醒未开启";
   }
 }
 
@@ -498,11 +815,13 @@ async function enablePush() {
     }
     if (Notification.permission === "denied") {
       elements.pushNote.textContent = "通知权限已被拒绝，请到浏览器站点设置里重新允许。";
+      elements.reminderSummary.textContent = "提醒被浏览器阻止";
       return;
     }
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
       elements.pushNote.textContent = "没有拿到通知权限，提醒未开启。";
+      elements.reminderSummary.textContent = "提醒未开启";
       return;
     }
     const { publicKey } = await request("/push/public-key");
@@ -516,6 +835,7 @@ async function enablePush() {
       body: JSON.stringify(subscription),
     });
     elements.pushNote.textContent = `已开启，${result.count} 台设备会收到提醒。`;
+    elements.reminderSummary.textContent = "提醒已开启";
     elements.pushButton.textContent = "已开启";
   } catch (error) {
     elements.pushNote.textContent = error.message;
@@ -547,6 +867,7 @@ async function loadModelSettings() {
   elements.modelSelect.value = settings.provider;
   const selected = settings.choices.find((choice) => choice.id === settings.provider);
   elements.modelNote.textContent = selected?.note || "";
+  elements.modelSummary.textContent = selected?.label || "模型未配置";
   updateChatAvailability(settings);
 }
 
@@ -566,37 +887,76 @@ function updateChatAvailability(settings) {
 
 async function submitMessage(event) {
   event.preventDefault();
+  const text = elements.text.value.trim();
+  if (!text) return;
   elements.submit.disabled = true;
-  elements.status.textContent = "正在解析并写入本地数据库……";
+  elements.form.setAttribute("aria-busy", "true");
+  const stages = [
+    "正在读取通知原文…",
+    "正在提取截止时间与材料…",
+    "正在生成事项卡…",
+  ];
+  let stageIndex = 0;
+  setFormStatus(stages[stageIndex], "working");
+  const stageTimer = window.setInterval(() => {
+    stageIndex = Math.min(stageIndex + 1, stages.length - 1);
+    setFormStatus(stages[stageIndex], "working");
+  }, 900);
   try {
     const result = await request("/messages", {
       method: "POST",
       body: JSON.stringify({
         platform: "manual",
         external_id: `manual-${crypto.randomUUID()}`,
-        text: elements.text.value,
+        text,
       }),
     });
-    elements.status.textContent =
+    setFormStatus(
       result.disposition === "duplicate"
         ? "这条消息已经处理过。"
         : result.disposition === "skipped"
           ? "已存入群消息流水（判定为闲聊，没有建卡）。"
-          : "已保存并生成事项。";
+          : "已保存，事项卡已生成。",
+      "success",
+    );
+    if (result.activity?.source_message_id) {
+      rememberNotificationSeen(result.activity.source_message_id);
+    }
+    elements.preview.classList.add("converting");
     elements.text.value = "";
     await refresh();
+    window.setTimeout(clearExtractionPreview, 280);
+    if (result.activity) {
+      window.setTimeout(
+        () => focusActivity(result.activity.id, result.disposition !== "duplicate"),
+        180,
+      );
+    }
   } catch (error) {
-    elements.status.textContent = error.message;
+    setFormStatus(`${error.message}。请检查内容后重试。`, "error");
   } finally {
+    window.clearInterval(stageTimer);
+    elements.form.removeAttribute("aria-busy");
     elements.submit.disabled = false;
   }
 }
 
 elements.form.addEventListener("submit", submitMessage);
+elements.settingsToggle.addEventListener("click", () => {
+  setMobileSettingsOpen(elements.settingsPanel.classList.contains("hidden"));
+});
+elements.text.addEventListener("input", scheduleExtractionPreview);
+elements.text.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    elements.form.requestSubmit();
+  }
+});
 elements.pushButton.addEventListener("click", enablePush);
 elements.sample.addEventListener("click", () => {
   elements.text.value = sample;
   elements.text.focus();
+  scheduleExtractionPreview();
 });
 
 elements.messageToggle.addEventListener("click", async () => {
@@ -646,6 +1006,7 @@ elements.modelSelect.addEventListener("change", async () => {
       (choice) => choice.id === settings.provider,
     );
     elements.modelNote.textContent = selected?.note || "模型已切换。";
+    elements.modelSummary.textContent = selected?.label || "模型已切换";
     updateChatAvailability(settings);
   } catch (error) {
     elements.modelNote.textContent = error.message;
@@ -663,10 +1024,23 @@ function openChatDialog() {
   if (!elements.chatFrame.getAttribute("src")) {
     elements.chatFrame.src = elements.chatFrame.dataset.src;
   }
+  chatReturnFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
   elements.chatDialog.showModal();
 }
 
 elements.openChat.addEventListener("click", openChatDialog);
+elements.chatDialog.addEventListener("close", () => {
+  if (chatReturnFocus?.isConnected) {
+    window.setTimeout(() => chatReturnFocus.focus({ preventScroll: true }), 0);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.chatDialog.open) {
+    elements.chatDialog.close();
+  }
+});
 
 elements.mobileButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -685,7 +1059,7 @@ elements.mobileButtons.forEach((button) => {
       return;
     }
     if (action === "settings") {
-      elements.modelSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      elements.settingsArea.scrollIntoView({ behavior: "smooth", block: "start" });
       window.setTimeout(() => elements.modelSelect.focus(), 260);
       return;
     }
@@ -708,7 +1082,18 @@ elements.fileForm.addEventListener("submit", async (event) => {
   if (!file) return;
   const button = elements.fileForm.querySelector("button[type='submit']");
   button.disabled = true;
-  elements.fileStatus.textContent = `正在上传 ${file.name}……`;
+  elements.fileForm.setAttribute("aria-busy", "true");
+  const stages = [
+    `正在上传 ${file.name}…`,
+    "正在读取文档内容…",
+    "正在提取事项与截止时间…",
+  ];
+  let stageIndex = 0;
+  elements.fileStatus.textContent = stages[stageIndex];
+  const stageTimer = window.setInterval(() => {
+    stageIndex = Math.min(stageIndex + 1, stages.length - 1);
+    elements.fileStatus.textContent = stages[stageIndex];
+  }, 1100);
   try {
     const formData = new FormData();
     formData.append("file", file);
@@ -730,21 +1115,82 @@ elements.fileForm.addEventListener("submit", async (event) => {
     elements.fileForm.reset();
     await refresh();
   } catch (error) {
-    elements.fileStatus.textContent = error.message;
+    elements.fileStatus.textContent = `${error.message}。请重试。`;
   } finally {
+    window.clearInterval(stageTimer);
+    elements.fileForm.removeAttribute("aria-busy");
     button.disabled = false;
   }
 });
 
 elements.filters.forEach((button) => {
   button.addEventListener("click", () => {
+    setBulkMode(false);
     currentStatus = button.dataset.status;
     elements.filters.forEach((item) => item.classList.toggle("active", item === button));
     setView("board");
     refresh().catch((error) => {
-      elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+      setBoardStatus(
+        `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+        "error",
+      );
     });
   });
+});
+
+elements.bulkToggle.addEventListener("click", () => {
+  setBulkMode(!bulkMode);
+  setView("board");
+  refresh().catch((error) => setFormStatus(error.message, "error"));
+});
+
+elements.boardStatus.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-action='retry-board']")) return;
+  refresh({ loading: !lastBoardData }).catch(() => {});
+});
+
+elements.bulkCancel.addEventListener("click", () => {
+  setBulkMode(false);
+  refresh().catch((error) => setFormStatus(error.message, "error"));
+});
+
+elements.list.addEventListener("change", (event) => {
+  const checkbox = event.target.closest("input[data-bulk-id]");
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.bulkId);
+  if (checkbox.checked) selectedActivityIds.add(id);
+  else selectedActivityIds.delete(id);
+  checkbox.closest(".activity")?.classList.toggle("selected", checkbox.checked);
+  updateBulkUi();
+});
+
+elements.bulkComplete.addEventListener("click", async () => {
+  const ids = [...selectedActivityIds];
+  if (!ids.length) return;
+  elements.bulkComplete.disabled = true;
+  try {
+    const results = await Promise.allSettled(
+      ids.map((id) =>
+        request(`/activities/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "completed" }),
+        }),
+      ),
+    );
+    const completed = results.filter((result) => result.status === "fulfilled").length;
+    const failed = results.length - completed;
+    setFormStatus(
+      failed
+        ? `已完成 ${completed} 项，${failed} 项未能更新。`
+        : `已将 ${completed} 项标记为完成。`,
+      failed ? "error" : "success",
+    );
+    setBulkMode(false);
+    await refresh();
+  } catch (error) {
+    setFormStatus(error.message, "error");
+    elements.bulkComplete.disabled = false;
+  }
 });
 
 elements.batchConfirm.addEventListener("click", async () => {
@@ -773,9 +1219,13 @@ elements.batchConfirm.addEventListener("click", async () => {
 });
 
 elements.trashToggle.addEventListener("click", () => {
+  setBulkMode(false);
   setView(currentView === "trash" ? "board" : "trash");
   refresh().catch((error) => {
-    elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    setBoardStatus(
+      `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+      "error",
+    );
   });
 });
 
@@ -921,23 +1371,27 @@ elements.list.addEventListener("submit", async (event) => {
 });
 
 loadSession()
-  .then(() => refresh())
+  .then(() => refresh({ loading: true }))
   .then(() => startLiveSync())
   .catch((error) => {
-    elements.list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    setBoardStatus(
+      `${escapeHtml(error.message)} <button class="text-button" type="button" data-action="retry-board">重试</button>`,
+      "error",
+    );
   });
 loadModelSettings().catch((error) => {
   elements.modelNote.textContent = error.message;
+  elements.modelSummary.textContent = "模型状态不可用";
 });
 registerServiceWorker()
   .then(() => refreshPushState())
-  .catch(() => {});
+  .catch(() => {
+    elements.reminderSummary.textContent = "提醒状态不可用";
+  });
 
-// =========================================
-// D岗 UI 优化：弹窗控制逻辑
-// =========================================
-const TOAST_DISMISS_KEY = "banwutong-update-toast-v1";
+const NOTIFICATION_SEEN_KEY = "banwutong-seen-notifications-v1";
 const toast = document.getElementById("update-toast");
+let notificationTimer = null;
 
 function setUpdateToastVisible(visible) {
   if (!toast) return;
@@ -946,40 +1400,75 @@ function setUpdateToastVisible(visible) {
   toast.toggleAttribute("inert", !visible);
 }
 
-function rememberToastDismissed() {
+function seenNotificationIds() {
   try {
-    localStorage.setItem(TOAST_DISMISS_KEY, "1");
+    const value = JSON.parse(localStorage.getItem(NOTIFICATION_SEEN_KEY) || "[]");
+    return new Set(Array.isArray(value) ? value.map(Number) : []);
   } catch {
-    // The toast still closes when storage is unavailable.
+    return new Set();
   }
 }
 
-function hasDismissedToast() {
+function rememberNotificationSeen(messageId) {
   try {
-    return localStorage.getItem(TOAST_DISMISS_KEY) === "1";
+    const ids = [...seenNotificationIds(), Number(messageId)].slice(-100);
+    localStorage.setItem(NOTIFICATION_SEEN_KEY, JSON.stringify(ids));
   } catch {
-    return false;
+    // Notifications still work when storage is unavailable.
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  if (toast && !hasDismissedToast()) {
-    window.setTimeout(() => setUpdateToastVisible(true), 2500);
-  }
-});
+function showMessageNotification(activityId, title, message) {
+  currentToastActivityId = activityId;
+  elements.toastTitle.textContent = title || "收到新通知";
+  elements.toastMessage.textContent = message;
+  elements.toastAction.textContent = activityId ? "查看事项" : "去导入";
+  setUpdateToastVisible(true);
+}
+
+function maybeShowMessageNotification(activities, messages) {
+  if (!toast || document.hidden) return;
+  const latest = messages.find(
+    (message) => message.kind === "notice" && message.activity_id,
+  );
+  if (!latest) return;
+  const seen = seenNotificationIds();
+  if (seen.has(Number(latest.id))) return;
+  rememberNotificationSeen(latest.id);
+  const activity = activities.find((item) => item.id === latest.activity_id);
+  const summary = latest.text.replace(/\s+/g, " ").trim();
+  window.clearTimeout(notificationTimer);
+  notificationTimer = window.setTimeout(
+    () =>
+      showMessageNotification(
+        latest.activity_id,
+        activity?.title || "收到新通知",
+        summary.length > 72 ? `${summary.slice(0, 72)}…` : summary,
+      ),
+    700,
+  );
+}
 
 window.closeToast = function () {
-  rememberToastDismissed();
   setUpdateToastVisible(false);
 };
 
 window.viewUpdateToast = function () {
   window.closeToast();
-  if (elements.workspace.classList.contains("is-empty")) {
+  if (!currentToastActivityId) {
     elements.importSection.scrollIntoView({ behavior: "smooth", block: "start" });
     window.setTimeout(() => elements.text.focus(), 260);
     return;
   }
-  elements.boardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  const cardExists = focusActivity(currentToastActivityId);
+  if (cardExists) return;
+  currentStatus = "";
+  elements.filters.forEach((button) =>
+    button.classList.toggle("active", button.dataset.status === ""),
+  );
+  setView("board");
+  refresh()
+    .then(() => focusActivity(currentToastActivityId))
+    .catch((error) => setFormStatus(error.message, "error"));
 };
 
