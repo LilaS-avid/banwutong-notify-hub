@@ -7,9 +7,16 @@
 ## 当前分支与基线
 
 - 项目目录：`C:\Users\zhou\Documents\ChatGPT\办务通`
-- 检查点分支：`codex/ui-workflow-checkpoint-20261103`（已包含第一轮 WIP + 第二轮验证修复）
+- 检查点分支：`codex/ui-workflow-checkpoint-20261103`（第一轮 WIP + 第二轮验证修复）。
+  origin 上仍是第一轮的 `0a00f40`，第二轮的 `9a33891` 还没推上去。
 - 基线 `main`：`3bf1cbc feat(ui): apply taste-led workspace redesign`
-- 第二轮完成后已合并到 `main` 并推送。
+- 第二轮完成后已用 squash 合并到本地 `main`（`ee4f8d9`）。
+- **推送未完成**：本机对 GitHub 的 HTTPS 访问返回 `CONNECT tunnel failed, response 502`，
+  沙箱内外都一样，需在网络恢复后补跑：
+
+  ```powershell
+  git push origin main
+  ```
 
 ## 本轮目标
 
