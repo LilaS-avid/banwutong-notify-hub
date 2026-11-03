@@ -198,18 +198,35 @@ def _deadline_review_reasons(
     return []
 
 
+# 卡片标题只留一眼能扫完的短句，整段话塞进去会把事项卡撑成三行。
+TITLE_MAX_LENGTH = 30
+
+
+def _shorten_title(candidate: str) -> str:
+    if len(candidate) <= TITLE_MAX_LENGTH:
+        return candidate
+    # 长句子优先取第一个分句当标题：
+    # “关于秋季研学的报名说明：请各位家长于……” → “关于秋季研学的报名说明”
+    head = re.split(r"[：:。；;！!？?]", candidate, maxsplit=1)[0].strip()
+    if 4 <= len(head) <= TITLE_MAX_LENGTH:
+        return head
+    return f"{candidate[:TITLE_MAX_LENGTH].rstrip('，,、。；;：: ')}…"
+
+
 def _parse_title(text: str) -> str:
     labelled = _line_field(text, "活动名称", "事项名称", "活动主题", "主题", "标题")
     if labelled:
-        return labelled
+        return _shorten_title(labelled)
 
     for raw_line in text.splitlines():
         candidate = _clean(raw_line)
         if not candidate or candidate.startswith(("http://", "https://")):
             continue
+        # 整段去掉【重要】【班级通知】这类前缀，否则标题会从半个括号开始。
+        candidate = re.sub(r"^[【\[]\s*[^】\]]{1,12}\s*[】\]]\s*", "", candidate)
         candidate = re.sub(r"^[#【\[]+|[】\]]+$", "", candidate).strip()
         if candidate and not re.match(r"^(报名|截止|地点|对象|材料|联系)", candidate):
-            return candidate[:80]
+            return _shorten_title(candidate)
     return "未命名事项"
 
 

@@ -54,6 +54,9 @@ from app.schemas import (
     ModelSettingsOut,
     ModelSettingsUpdate,
     NotificationOut,
+    PreviewActivityOut,
+    PreviewIn,
+    PreviewOut,
     PushSubscribe,
     PushUnsubscribe,
     ReminderOut,
@@ -215,7 +218,7 @@ def create_app(
         if (
             request.cookies.get(GUEST_COOKIE) == "1"
             and request.method == "POST"
-            and path in {"/api/messages", "/api/files"}
+            and path in {"/api/messages", "/api/files", "/api/preview"}
         ):
             return await call_next(request)
         if request.method in {"GET", "HEAD", "OPTIONS"} and path.startswith("/api/"):
@@ -321,6 +324,44 @@ def create_app(
         results = repository.ingest_many(payload, parsed)
         disposition, activity = results[0]
         return IngestOut(disposition=disposition, activity=activity)
+
+    @app.post("/api/preview", response_model=PreviewOut)
+    async def preview_message(payload: PreviewIn) -> PreviewOut:
+        """Run deterministic extraction without writing a message or activity."""
+        now = datetime.now(SHANGHAI)
+        blocks = [
+            DocumentBlock(
+                locator="preview-1",
+                block_type="paragraph",
+                text=payload.text,
+            )
+        ]
+        understood = await asyncio.to_thread(
+            understand_document,
+            blocks,
+            now,
+            "rules",
+        )
+        activities = [
+            PreviewActivityOut(
+                title=item.parsed.title,
+                audience=item.parsed.audience,
+                deadline=item.parsed.deadline,
+                location=item.parsed.location,
+                materials=item.parsed.materials,
+                registration_url=item.parsed.registration_url,
+                contact=item.parsed.contact,
+                needs_review=item.parsed.needs_review,
+                review_reasons=item.parsed.review_reasons,
+            )
+            for item in understood.activities
+        ]
+        return PreviewOut(
+            kind="chat" if understood.kind == "chat" else "notice",
+            method=understood.method,
+            activities=activities,
+            note="预览使用本地规则；保存时会按当前模型再次解析。",
+        )
 
     @app.get("/api/messages", response_model=list[MessageOut])
     def list_messages(

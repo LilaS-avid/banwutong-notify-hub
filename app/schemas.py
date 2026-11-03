@@ -48,6 +48,37 @@ class IngestOut(BaseModel):
     activity: ActivityOut | None = None
 
 
+class PreviewIn(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("text")
+    @classmethod
+    def strip_preview_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Preview text cannot be empty")
+        return cleaned
+
+
+class PreviewActivityOut(BaseModel):
+    title: str
+    audience: str | None
+    deadline: str | None
+    location: str | None
+    materials: list[str]
+    registration_url: str | None
+    contact: str | None
+    needs_review: bool
+    review_reasons: list[str] = Field(default_factory=list)
+
+
+class PreviewOut(BaseModel):
+    kind: Literal["notice", "chat"]
+    method: str
+    activities: list[PreviewActivityOut]
+    note: str | None = None
+
+
 class MessageOut(BaseModel):
     id: int
     platform: str
