@@ -9,7 +9,7 @@
   <link rel="icon" href="/static/favicon.ico">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20261103-ui3">
 </head>
 <body>
   <div class="page-shell">
@@ -59,7 +59,7 @@
         <button class="primary-button" id="push-enable" type="button">开启提醒</button>
       </section>
 
-      <div class="workspace">
+      <div class="workspace is-empty">
         <section class="composer panel" id="import-section">
           <div class="section-heading">
             <div>
@@ -156,13 +156,13 @@
       </section>
     </main>
   </div>
-  <button class="chat-launcher" id="open-chat" type="button">
+  <button class="chat-launcher hidden" id="open-chat" type="button">
     <span class="chat-launcher-mark" aria-hidden="true"><i></i><i></i><i></i></span>
     <span class="chat-launcher-copy">
       <strong>向班务通 AI 提问</strong>
       <small>打开独立对话窗口</small>
     </span>
-    <span class="chat-launcher-action">打开对话</span>
+    <span class="chat-launcher-action">AI 对话</span>
   </button>
   <nav class="mobile-nav" id="mobile-nav" aria-label="手机快捷导航">
     <button class="active" type="button" data-mobile-action="board">
@@ -173,11 +173,16 @@
       <span aria-hidden="true">＋</span>
       <small>导入</small>
     </button>
-    <button type="button" data-mobile-action="chat">
+    <button class="hidden" type="button" data-mobile-action="chat">
       <span aria-hidden="true">◌</span>
       <small>AI</small>
     </button>
-    <button type="button" data-mobile-action="settings">
+    <button
+      type="button"
+      data-mobile-action="settings"
+      aria-controls="model-section push-section"
+      aria-expanded="false"
+    >
       <span aria-hidden="true">⚙</span>
       <small>设置</small>
     </button>
@@ -190,7 +195,26 @@
       loading="lazy"
     ></iframe>
   </dialog>
-  <script src="/static/app.js?v=20261102-source" defer></script>
+  <script src="/static/app.js?v=20261103-ui" defer></script>
+  <!-- D岗 UI 优化：更新消息提示弹窗 (Toast) -->
+  <div
+    id="update-toast"
+    class="toast-container"
+    role="status"
+    aria-live="polite"
+    aria-hidden="true"
+    inert
+  >
+    <div class="toast-content">
+      <div class="toast-icon">🔔</div>
+      <div class="toast-text">
+        <h4>收到新通知</h4>
+        <p>“哈尔滨医科大学选区投票”有最新更新！</p>
+        <button class="toast-action" type="button" onclick="viewUpdateToast()">查看事项 &rarr;</button>
+      </div>
+      <button class="toast-close" type="button" aria-label="关闭通知" onclick="closeToast()">✕</button>
+    </div>
+  </div>
 </body>
 </html>
 

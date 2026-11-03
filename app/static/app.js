@@ -4,6 +4,7 @@ let currentView = "board";
 let reviewItems = [];
 let isGuest = false;
 let lastSignature = "";
+let chatAvailable = false;
 
 const elements = {
   form: document.querySelector("#message-form"),
@@ -24,6 +25,7 @@ const elements = {
   mobileButtons: [...document.querySelectorAll("[data-mobile-action]")],
   boardSection: document.querySelector("#board-section"),
   importSection: document.querySelector("#import-section"),
+  workspace: document.querySelector(".workspace"),
   modelSection: document.querySelector("#model-section"),
   chatDialog: document.querySelector("#chat-dialog"),
   chatFrame: document.querySelector("#chat-frame"),
@@ -79,11 +81,20 @@ const reviewReasonLabels = {
 
 const mobileViewport = window.matchMedia("(max-width: 760px)");
 
+function setMobileSettingsOpen(open) {
+  document.body.classList.toggle("show-mobile-settings", open);
+  const settingsButton = elements.mobileButtons.find(
+    (button) => button.dataset.mobileAction === "settings",
+  );
+  settingsButton?.setAttribute("aria-expanded", String(open));
+}
+
 function updateDeviceLayout() {
   const mobileDevice =
     mobileViewport.matches || navigator.userAgentData?.mobile === true;
   document.body.classList.toggle("device-mobile", mobileDevice);
   document.documentElement.dataset.device = mobileDevice ? "mobile" : "desktop";
+  if (!mobileDevice) setMobileSettingsOpen(false);
 }
 
 updateDeviceLayout();
@@ -388,6 +399,7 @@ function renderMessages(messages) {
 function renderBoard(all, trash, visible, messages, reviews = []) {
   reviewItems = reviews;
   lastSignature = signatureOf(all, trash, messages, reviews);
+  elements.workspace.classList.toggle("is-empty", all.length === 0);
   elements.metrics.total.textContent = all.length;
   elements.metrics.open.textContent = all.filter((item) => item.status === "open").length;
   elements.metrics.review.textContent = reviews.length;
@@ -538,6 +550,21 @@ async function loadModelSettings() {
   elements.modelSelect.value = settings.provider;
   const selected = settings.choices.find((choice) => choice.id === settings.provider);
   elements.modelNote.textContent = selected?.note || "";
+  updateChatAvailability(settings);
+}
+
+function updateChatAvailability(settings) {
+  const selected = settings.choices.find((choice) => choice.id === settings.provider);
+  chatAvailable = settings.provider !== "rules" && Boolean(selected?.available);
+  const mobileChatButton = elements.mobileButtons.find(
+    (button) => button.dataset.mobileAction === "chat",
+  );
+  elements.openChat.classList.toggle("hidden", !chatAvailable);
+  mobileChatButton?.classList.toggle("hidden", !chatAvailable);
+  elements.mobileNav.classList.toggle("chat-unavailable", !chatAvailable);
+  if (!chatAvailable && elements.chatDialog.open) {
+    elements.chatDialog.close();
+  }
 }
 
 async function submitMessage(event) {
@@ -622,6 +649,7 @@ elements.modelSelect.addEventListener("change", async () => {
       (choice) => choice.id === settings.provider,
     );
     elements.modelNote.textContent = selected?.note || "模型已切换。";
+    updateChatAvailability(settings);
   } catch (error) {
     elements.modelNote.textContent = error.message;
     await loadModelSettings();
@@ -631,6 +659,10 @@ elements.modelSelect.addEventListener("change", async () => {
 });
 
 function openChatDialog() {
+  if (!chatAvailable) {
+    elements.modelSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (!elements.chatFrame.getAttribute("src")) {
     elements.chatFrame.src = elements.chatFrame.dataset.src;
   }
@@ -641,14 +673,15 @@ elements.openChat.addEventListener("click", openChatDialog);
 
 elements.mobileButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    elements.mobileButtons.forEach((item) =>
-      item.classList.toggle("active", item === button),
-    );
     const action = button.dataset.mobileAction;
     if (action === "chat") {
       openChatDialog();
       return;
     }
+    setMobileSettingsOpen(action === "settings");
+    elements.mobileButtons.forEach((item) =>
+      item.classList.toggle("active", item === button),
+    );
     if (action === "import") {
       elements.importSection.scrollIntoView({ behavior: "smooth", block: "start" });
       window.setTimeout(() => elements.text.focus(), 260);
@@ -902,4 +935,49 @@ loadModelSettings().catch((error) => {
 registerServiceWorker()
   .then(() => refreshPushState())
   .catch(() => {});
+
+// =========================================
+// D岗 UI 优化：弹窗控制逻辑
+// =========================================
+const TOAST_DISMISS_KEY = "banwutong-update-toast-v1";
+const toast = document.getElementById("update-toast");
+
+function setUpdateToastVisible(visible) {
+  if (!toast) return;
+  toast.classList.toggle("show", visible);
+  toast.setAttribute("aria-hidden", String(!visible));
+  toast.toggleAttribute("inert", !visible);
+}
+
+function rememberToastDismissed() {
+  try {
+    localStorage.setItem(TOAST_DISMISS_KEY, "1");
+  } catch {
+    // The toast still closes when storage is unavailable.
+  }
+}
+
+function hasDismissedToast() {
+  try {
+    return localStorage.getItem(TOAST_DISMISS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (toast && !hasDismissedToast()) {
+    window.setTimeout(() => setUpdateToastVisible(true), 2500);
+  }
+});
+
+window.closeToast = function () {
+  rememberToastDismissed();
+  setUpdateToastVisible(false);
+};
+
+window.viewUpdateToast = function () {
+  window.closeToast();
+  elements.boardSection.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 
