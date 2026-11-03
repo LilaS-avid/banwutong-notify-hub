@@ -8,15 +8,16 @@
 
 - 项目目录：`C:\Users\zhou\Documents\ChatGPT\办务通`
 - 检查点分支：`codex/ui-workflow-checkpoint-20261103`（第一轮 WIP + 第二轮验证修复）。
-  origin 上仍是第一轮的 `0a00f40`，第二轮的 `9a33891` 还没推上去。
+  origin 上仍是第一轮的 `0a00f40`，第二轮那条本地提交没有单独推上去。
 - 基线 `main`：`3bf1cbc feat(ui): apply taste-led workspace redesign`
-- 第二轮完成后已用 squash 合并到本地 `main`（`ee4f8d9`）。
-- **推送未完成**：本机对 GitHub 的 HTTPS 访问返回 `CONNECT tunnel failed, response 502`，
-  沙箱内外都一样，需在网络恢复后补跑：
-
-  ```powershell
-  git push origin main
-  ```
+- 第二轮已通过 squash 合并进 `main` 并上传到 origin：
+  - `3507f07 feat(ui): guided notification workflow with live preview and real notifications`
+  - `e8fbd5d docs: note that the main push is still blocked locally`（本文档的推送说明）
+- **推送方式注意**：本机 `github.com:443` 直连超时、走本地代理返回
+  `CONNECT tunnel failed, response 502`，`git push` 用不了；只有 `api.github.com`
+  可达。本轮是用 GitHub Git Data API 建 blob/tree/commit 再移动 `refs/heads/main`
+  上传的（建完 tree 会与本地 tree sha 比对，确保逐字节一致）。
+  网络上能直连 `github.com` 之后，`git push` 会恢复正常，不需要改任何东西。
 
 ## 本轮目标
 
