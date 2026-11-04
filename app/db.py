@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS activities (
     materials TEXT NOT NULL DEFAULT '[]',
     registration_url TEXT,
     contact TEXT,
+    extra TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     needs_review INTEGER NOT NULL DEFAULT 0,
     review_reasons TEXT NOT NULL DEFAULT '[]',
@@ -190,6 +191,26 @@ class Database:
             if "reviewed_at" not in activity_columns:
                 connection.execute(
                     "ALTER TABLE activities ADD COLUMN reviewed_at TEXT"
+                )
+            # 附加信息：注意事项、补充说明这类不属于固定字段的内容。
+            if "extra" not in activity_columns:
+                connection.execute("ALTER TABLE activities ADD COLUMN extra TEXT")
+            event_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(activity_events)")
+            }
+            # 改前快照：消息被撤回时要靠它把事项还原回去。
+            if "snapshot" not in event_columns:
+                connection.execute(
+                    "ALTER TABLE activity_events ADD COLUMN snapshot TEXT"
+                )
+            message_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(messages)")
+            }
+            if "recalled_at" not in message_columns:
+                connection.execute(
+                    "ALTER TABLE messages ADD COLUMN recalled_at TEXT"
                 )
             connection.execute(
                 """

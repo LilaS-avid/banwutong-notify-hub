@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.db import Database
 from app.documents import DocumentBlock
-from app.parser import ParsedActivity, normalise_key
+from app.parser import ParsedActivity, dedupe_materials, normalise_key
 from app.review import describe_reasons, has_blocking_reason, sanitise_reasons
 from app.schemas import (
     ActivityConfirm,
@@ -28,6 +29,73 @@ from app.schemas import (
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 TRASH_RETENTION = timedelta(days=7)
+
+# 「作废通知」这类整条撤回：要作废旧事项并进回收站，不能新建卡片。
+PURE_CANCEL_HINT = re.compile(
+    r"作废|不再收集|不用提交|无需提交|不用再交|不用交|撤回|取消通知|不组织了|取消本次活动"
+)
+QUOTED_TITLE = re.compile(r"【([^】]{2,30})】|\[([^\]]{2,30})\]|《([^》]{2,30})》")
+
+
+def _lcs_length(left: str, right: str) -> int:
+    """最长公共子串长度，用来判断作废通知说的是哪条旧事项。"""
+    if not left or not right:
+        return 0
+    best = 0
+    previous = [0] * (len(right) + 1)
+    for i in range(1, len(left) + 1):
+        current = [0] * (len(right) + 1)
+        for j in range(1, len(right) + 1):
+            if left[i - 1] == right[j - 1]:
+                current[j] = previous[j - 1] + 1
+                if current[j] > best:
+                    best = current[j]
+        previous = current
+    return best
+
+
+def _cancel_queries(parsed: ParsedActivity, text: str) -> set[str]:
+    queries = {normalise_key(parsed.title)}
+    for match in QUOTED_TITLE.finditer(text):
+        quoted = next((group for group in match.groups() if group), "")
+        if quoted:
+            queries.add(normalise_key(quoted))
+    return {query for query in queries if len(query) >= 3}
+
+
+def _best_title_match(rows, queries: set[str]):
+    """返回最可能对应的那条旧事项；实在分不出来就谁也不动。"""
+    if not queries:
+        return None
+    scored: list[tuple[int, float, object]] = []
+    for row in rows:
+        title = normalise_key(row["title"])
+        if not title:
+            continue
+        best_score, best_ratio = 0, 0.0
+        for query in queries:
+            score = _lcs_length(query, title)
+            ratio = score / max(len(title), 1)
+            if (score, ratio) > (best_score, best_ratio):
+                best_score, best_ratio = score, ratio
+        if best_score:
+            scored.append((best_score, best_ratio, row))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    best_score, best_ratio, best_row = scored[0]
+    if best_score < 4:
+        return None
+    if len(scored) > 1:
+        second_score, second_ratio, _ = scored[1]
+        # 命中长度相同就看谁跟标题更贴合，比值也打平才算不确定。
+        if (best_score, round(best_ratio, 3)) == (second_score, round(second_ratio, 3)):
+            return None
+    return best_row
+
+
+def _best_cancel_match(rows, parsed: ParsedActivity, text: str):
+    return _best_title_match(rows, _cancel_queries(parsed, text))
 DOCUMENT_SELECT = """
 SELECT d.*,
        (SELECT COUNT(*) FROM document_blocks b WHERE b.document_id = d.id)
@@ -65,6 +133,7 @@ def _to_activity(row) -> ActivityOut:
         materials=json.loads(row["materials"] or "[]"),
         registration_url=row["registration_url"],
         contact=row["contact"],
+        extra=row["extra"],
         status=row["status"],
         needs_review=bool(row["needs_review"]),
         review_reasons=list(json.loads(row["review_reasons"] or "[]")),
@@ -275,10 +344,63 @@ class ActivityRepository:
 
             results: list[tuple[str, ActivityOut]] = []
             for parsed in parsed_activities:
+                if parsed.change_type == "cancel" and PURE_CANCEL_HINT.search(payload.text):
+                    cancelled = self._cancel_matching_activity(
+                        connection, parsed, payload.text, message_id, now
+                    )
+                    # 找不到对应旧事项时也不新建卡片：作废通知本身不是待办。
+                    results.append(
+                        ("updated", cancelled) if cancelled is not None else ("skipped", None)
+                    )
+                    continue
                 results.append(
                     self._upsert_activity(connection, message_id, parsed, now)
                 )
             return results
+
+    def _cancel_matching_activity(
+        self,
+        connection,
+        parsed: ParsedActivity,
+        text: str,
+        message_id: int,
+        now: str,
+    ) -> ActivityOut | None:
+        rows = connection.execute(
+            """
+            SELECT * FROM activities
+            WHERE deleted_at IS NULL AND status != 'cancelled'
+            """
+        ).fetchall()
+        target = _best_cancel_match(rows, parsed, text)
+        if target is None:
+            return None
+        # 作废 = 撤回这张卡：状态置 cancelled，并进回收站（7 天内可恢复）。
+        connection.execute(
+            """
+            UPDATE activities
+            SET status = 'cancelled', deleted_at = ?, updated_at = ?,
+                needs_review = 0, review_reasons = '[]'
+            WHERE id = ?
+            """,
+            (now, now, target["id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO activity_events(activity_id, message_id, change_type, created_at, snapshot)
+            VALUES (?, ?, 'cancel', ?, ?)
+            """,
+            (
+                target["id"],
+                message_id,
+                now,
+                json.dumps(dict(target), ensure_ascii=False, default=str),
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM activities WHERE id = ?", (target["id"],)
+        ).fetchone()
+        return _to_activity(row)
 
     def _upsert_activity(
         self,
@@ -292,11 +414,20 @@ class ActivityRepository:
                 (parsed.dedupe_key,),
             ).fetchone()
 
+            # 「补充/更正」类通知标题往往和原事项不一样，靠标题近似找回原卡，
+            # 否则同一条通知会被拆成两张。
+            if existing is None and parsed.change_type == "update":
+                candidates = connection.execute(
+                    """
+                    SELECT * FROM activities
+                    WHERE deleted_at IS NULL AND status != 'cancelled'
+                    """
+                ).fetchall()
+                existing = _best_title_match(candidates, {parsed.dedupe_key})
+
             if existing:
                 existing_materials = json.loads(existing["materials"] or "[]")
-                merged_materials = existing_materials + [
-                    item for item in parsed.materials if item not in existing_materials
-                ]
+                merged_materials = dedupe_materials(existing_materials + parsed.materials)
                 merged = {
                     "audience": parsed.audience or existing["audience"],
                     "deadline": parsed.deadline or existing["deadline"],
@@ -310,6 +441,7 @@ class ActivityRepository:
                         parsed.registration_url or existing["registration_url"]
                     ),
                     "contact": parsed.contact or existing["contact"],
+                    "extra": parsed.extra or existing["extra"],
                 }
                 status = "cancelled" if parsed.change_type == "cancel" else "open"
                 reasons = [
@@ -329,7 +461,7 @@ class ActivityRepository:
                     """
                     UPDATE activities
                     SET audience = ?, deadline = ?, location = ?, materials = ?,
-                        registration_url = ?, contact = ?, status = ?,
+                        registration_url = ?, contact = ?, extra = ?, status = ?,
                         needs_review = ?, review_reasons = ?, reviewed_at = ?,
                         source_message_id = ?, updated_at = ?
                     WHERE id = ?
@@ -341,6 +473,7 @@ class ActivityRepository:
                         merged["materials"],
                         merged["registration_url"],
                         merged["contact"],
+                        merged["extra"],
                         status,
                         merged["needs_review"],
                         json.dumps(reasons, ensure_ascii=False),
@@ -359,9 +492,9 @@ class ActivityRepository:
                     """
                     INSERT INTO activities(
                         dedupe_key, title, audience, deadline, location, materials,
-                        registration_url, contact, status, needs_review,
+                        registration_url, contact, extra, status, needs_review,
                         review_reasons, source_message_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         parsed.dedupe_key,
@@ -372,6 +505,7 @@ class ActivityRepository:
                         json.dumps(parsed.materials, ensure_ascii=False),
                         parsed.registration_url,
                         parsed.contact,
+                        parsed.extra,
                         status,
                         int(bool(reasons)),
                         json.dumps(reasons, ensure_ascii=False),
@@ -383,12 +517,14 @@ class ActivityRepository:
                 activity_id = int(cursor.lastrowid)
                 disposition = "created"
 
+            # 记下改动前的样子：QQ 里撤回消息后要能把这张卡还原回去。
+            snapshot = json.dumps(dict(existing), ensure_ascii=False, default=str) if existing else None
             connection.execute(
                 """
-                INSERT INTO activity_events(activity_id, message_id, change_type, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO activity_events(activity_id, message_id, change_type, created_at, snapshot)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (activity_id, message_id, parsed.change_type, now),
+                (activity_id, message_id, parsed.change_type, now, snapshot),
             )
             row = connection.execute(
                 "SELECT * FROM activities WHERE id = ?",
@@ -512,7 +648,7 @@ class ActivityRepository:
                 UPDATE activities
                 SET dedupe_key = ?, title = ?, audience = ?, deadline = ?,
                     location = ?, materials = ?, registration_url = ?,
-                    contact = ?, needs_review = ?, review_reasons = ?,
+                    contact = ?, extra = ?, needs_review = ?, review_reasons = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -522,9 +658,10 @@ class ActivityRepository:
                     payload.audience,
                     deadline,
                     payload.location,
-                    json.dumps(payload.materials, ensure_ascii=False),
+                    json.dumps(dedupe_materials(payload.materials), ensure_ascii=False),
                     payload.registration_url,
                     payload.contact,
+                    payload.extra,
                     int(bool(reasons) and existing["reviewed_at"] is None),
                     json.dumps(reasons, ensure_ascii=False),
                     now,
@@ -712,6 +849,74 @@ class ActivityRepository:
                 (activity_id,),
             ).fetchone()
             return _to_trash_activity(deleted)
+
+    def recall_message(self, message_id: int) -> dict | None:
+        """撤回一条消息：把它对事项的影响回滚（改动还原 / 新建的进回收站）。"""
+        now = _now_iso()
+        with self.database.connect() as connection:
+            message = connection.execute(
+                "SELECT * FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if message is None:
+                return None
+            events = connection.execute(
+                "SELECT * FROM activity_events WHERE message_id = ? ORDER BY id DESC",
+                (message_id,),
+            ).fetchall()
+            restored = 0
+            trashed = 0
+            for event in events:
+                snapshot = event["snapshot"]
+                if snapshot:
+                    data = json.loads(snapshot)
+                    connection.execute(
+                        """
+                        UPDATE activities
+                        SET dedupe_key = ?, title = ?, audience = ?, deadline = ?,
+                            location = ?, materials = ?, registration_url = ?,
+                            contact = ?, extra = ?, status = ?, needs_review = ?,
+                            review_reasons = ?, reviewed_at = ?, deleted_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            data.get("dedupe_key"),
+                            data.get("title"),
+                            data.get("audience"),
+                            data.get("deadline"),
+                            data.get("location"),
+                            data.get("materials") or "[]",
+                            data.get("registration_url"),
+                            data.get("contact"),
+                            data.get("extra"),
+                            data.get("status") or "open",
+                            int(data.get("needs_review") or 0),
+                            data.get("review_reasons") or "[]",
+                            data.get("reviewed_at"),
+                            data.get("deleted_at"),
+                            now,
+                            event["activity_id"],
+                        ),
+                    )
+                    restored += 1
+                else:
+                    # 这条消息创建的事项：撤回后退回回收站。
+                    connection.execute(
+                        """
+                        UPDATE activities
+                        SET status = 'cancelled', deleted_at = ?, updated_at = ?
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        (now, now, event["activity_id"]),
+                    )
+                    trashed += 1
+                connection.execute(
+                    "DELETE FROM activity_events WHERE id = ?", (event["id"],)
+                )
+            connection.execute(
+                "UPDATE messages SET recalled_at = ? WHERE id = ?", (now, message_id)
+            )
+            return {"restored": restored, "trashed": trashed}
 
     def list_trash(self) -> list[TrashActivityOut]:
         with self.database.connect() as connection:

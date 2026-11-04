@@ -100,6 +100,7 @@ const reviewReasonLabels = {
   title_missing: "标题取自首行",
   ai_uncertain: "AI 不确定",
   deadline_mismatch: "AI 与规则不一致",
+  material_conflict: "材料说法矛盾",
 };
 
 const mobileViewport = window.matchMedia("(max-width: 760px)");
@@ -244,6 +245,7 @@ function renderExtractionPreview(data) {
         activity.materials.length
           ? `材料：${activity.materials.slice(0, 3).join("、")}`
           : "",
+        activity.extra ? `附加：${activity.extra}` : "",
       ].filter(Boolean);
       const review = activity.needs_review
         ? `<span class="preview-review">需要核对 ${activity.review_reasons.length || 1} 项</span>`
@@ -345,6 +347,9 @@ function editForm(activity, options = {}) {
         <label class="edit-field">报名链接
           <input name="registration_url" type="url" value="${escapeHtml(activity.registration_url || "")}">
         </label>
+        <label class="edit-field wide">附加信息
+          <input name="extra" maxlength="2000" value="${escapeHtml(activity.extra || "")}" placeholder="注意事项、补充说明等">
+        </label>
       </div>
       <div class="edit-actions">
         <button type="button" data-action="cancel-edit">取消</button>
@@ -412,6 +417,7 @@ function activityCard(activity) {
         <div><b>适用对象</b>${escapeHtml(activity.audience || "未填写")}</div>
         <div><b>报名材料</b>${escapeHtml(materials)}</div>
         <div><b>地点 / 联系人</b>${escapeHtml([activity.location, activity.contact].filter(Boolean).join(" · ") || "未填写")}</div>
+        <div><b>附加信息</b>${escapeHtml(activity.extra || "未填写")}</div>
       </div>
       <div class="source-box hidden" data-source-id="${activity.id}"></div>
       ${editForm(activity)}
@@ -480,6 +486,7 @@ function reviewCard(item) {
         <div><b>适用对象</b>${escapeHtml(activity.audience || "未填写")}</div>
         <div><b>报名材料</b>${escapeHtml(materials)}</div>
         <div><b>地点 / 联系人</b>${escapeHtml([activity.location, activity.contact].filter(Boolean).join(" · ") || "未填写")}</div>
+        <div><b>附加信息</b>${escapeHtml(activity.extra || "未填写")}</div>
       </div>
       <details class="review-evidence">
         <summary>查看原文证据</summary>
@@ -562,11 +569,13 @@ async function fetchBoard() {
     request("/activities"),
     request("/trash"),
     request(`/activities${query}`),
-    request("/reviews"),
   ];
-  // 访客看不到群消息流水，连请求都不发。
-  if (!isGuest) calls.push(request("/messages?limit=50"));
-  const [all, trash, visible, reviews, messages = []] = await Promise.all(calls);
+  // 访客看不到群消息流水和待核对证据，连请求都不发。
+  if (!isGuest) {
+    calls.push(request("/reviews"));
+    calls.push(request("/messages?limit=50"));
+  }
+  const [all, trash, visible, reviews = [], messages = []] = await Promise.all(calls);
   return { all, trash, visible, reviews, messages };
 }
 
@@ -577,6 +586,9 @@ function messageRow(message) {
     : message.activity_id
       ? `<button type="button" class="text-button" data-action="locate">看事项卡</button>`
       : "";
+  const recallAction = isGuest
+    ? ""
+    : `<button type="button" class="text-button" data-action="recall-message" data-id="${message.id}">撤回这条</button>`;
   return `
     <article class="message-row ${isChat ? "chat" : "notice"}">
       <div class="message-meta">
@@ -584,7 +596,7 @@ function messageRow(message) {
         <time>${escapeHtml(formatTrashTime(message.sent_at))}</time>
       </div>
       <p class="message-text">${escapeHtml(message.text)}</p>
-      <div class="message-action">${action}</div>
+      <div class="message-action">${action}${recallAction}</div>
     </article>`;
 }
 
@@ -856,11 +868,25 @@ async function loadSession() {
     isGuest = !session.authenticated;
     document.body.classList.toggle("guest", isGuest);
     elements.guestBanner.classList.toggle("hidden", !isGuest);
+    if (isGuest) removeAiEntry();
     return session;
   } catch (error) {
     isGuest = false;
     return { authenticated: true, guest: false };
   }
+}
+
+// 访客模式没有云端模型，AI 对话也用不了，直接把入口和对话框从页面上摘掉，
+// 免得点开只看到一句「登录后才能修改」。
+function removeAiEntry() {
+  chatAvailable = false;
+  const mobileChatButton = elements.mobileButtons.find(
+    (button) => button.dataset.mobileAction === "chat",
+  );
+  mobileChatButton?.remove();
+  elements.openChat?.remove();
+  elements.chatDialog?.remove();
+  elements.mobileNav?.classList.add("chat-unavailable");
 }
 
 async function loadModelSettings() {
@@ -880,7 +906,7 @@ async function loadModelSettings() {
 
 function updateChatAvailability(settings) {
   const selected = settings.choices.find((choice) => choice.id === settings.provider);
-  chatAvailable = settings.provider !== "rules" && Boolean(selected?.available);
+  chatAvailable = !isGuest && settings.provider !== "rules" && Boolean(selected?.available);
   const mobileChatButton = elements.mobileButtons.find(
     (button) => button.dataset.mobileAction === "chat",
   );
@@ -1024,6 +1050,7 @@ elements.modelSelect.addEventListener("change", async () => {
 });
 
 function openChatDialog() {
+  if (!elements.chatDialog || !elements.chatFrame) return;
   if (!chatAvailable) {
     elements.modelSection.scrollIntoView({ behavior: "smooth", block: "start" });
     return;
@@ -1037,14 +1064,14 @@ function openChatDialog() {
 }
 
 elements.openChat.addEventListener("click", openChatDialog);
-elements.chatDialog.addEventListener("close", () => {
+elements.chatDialog?.addEventListener("close", () => {
   if (chatReturnFocus?.isConnected) {
     window.setTimeout(() => chatReturnFocus.focus({ preventScroll: true }), 0);
   }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && elements.chatDialog.open) {
+  if (event.key === "Escape" && elements.chatDialog?.open) {
     elements.chatDialog.close();
   }
 });
@@ -1085,7 +1112,7 @@ window.addEventListener("message", (event) => {
     event.origin === window.location.origin &&
     event.data?.type === "banwutong-close-chat"
   ) {
-    elements.chatDialog.close();
+    elements.chatDialog?.close();
   }
 });
 
@@ -1244,6 +1271,24 @@ elements.trashToggle.addEventListener("click", () => {
 elements.list.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
+  if (button.dataset.action === "recall-message") {
+    if (!window.confirm("撤回这条消息？它改动过的事项会还原，它新建的事项会进回收站。")) {
+      return;
+    }
+    button.disabled = true;
+    try {
+      const result = await request(`/messages/${button.dataset.id}/recall`, {
+        method: "POST",
+      });
+      elements.status.textContent =
+        `已撤回：还原 ${result.restored} 个事项，移入回收站 ${result.trashed} 个。`;
+      await refresh();
+    } catch (error) {
+      elements.status.textContent = error.message;
+      button.disabled = false;
+    }
+    return;
+  }
   if (button.dataset.action === "edit" || button.dataset.action === "review-edit") {
     const card = button.closest(".activity");
     card.querySelector(".edit-form").classList.remove("hidden");
@@ -1361,6 +1406,7 @@ elements.list.addEventListener("submit", async (event) => {
       location: data.get("location") || null,
       contact: data.get("contact") || null,
       registration_url: data.get("registration_url") || null,
+      extra: data.get("extra") || null,
     };
     if (form.dataset.confirm === "1") {
       await request(`/activities/${form.dataset.editId}/confirm`, {

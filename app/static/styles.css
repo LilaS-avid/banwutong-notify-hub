@@ -1485,6 +1485,21 @@ body.guest .workspace { grid-template-columns: 1fr; }
 body.guest .card-actions,
 body.guest .message-action { display: none; }
 
+/* 访客只读：不显示导入、待核对和批量处理入口 */
+body.guest #import-section,
+body.guest .review-filter,
+body.guest #review-toolbar,
+body.guest #bulk-toggle,
+body.guest #bulk-actions {
+  display: none !important;
+}
+
+/* 访客模式没有云端模型，AI 入口一并藏掉（JS 还会把节点整个移除） */
+body.guest .chat-launcher,
+body.guest .mobile-nav [data-mobile-action="chat"] {
+  display: none !important;
+}
+
 /* 群消息流水 */.message-panel {
   margin-top: 22px;
   padding: 24px;

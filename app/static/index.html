@@ -9,7 +9,7 @@
   <link rel="icon" href="/static/favicon.ico">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <link rel="stylesheet" href="/static/styles.css?v=20261103-workflow2">
+  <link rel="stylesheet" href="/static/styles.css?v=20261104-authfix1">
 </head>
 <body>
   <div class="page-shell">
@@ -45,7 +45,7 @@
 
     <main>
       <p class="guest-banner hidden" id="guest-banner">
-        访客模式：可以导入通知，解析用本地规则。<a href="/login">登录</a>后可用云端模型、编辑事项和截止提醒。
+        访客模式：只读查看事项，<strong>不开放导入、编辑和 AI 对话</strong>。<a href="/login">登录</a>后可用完整功能。
       </p>
       <section class="metrics" aria-label="事项概览">
         <article><span id="metric-total">0</span><small>全部事项</small></article>
@@ -255,7 +255,7 @@
       loading="lazy"
     ></iframe>
   </dialog>
-  <script src="/static/app.js?v=20261103-workflow2" defer></script>
+  <script src="/static/app.js?v=20261104-authfix1" defer></script>
 </body>
 </html>
 

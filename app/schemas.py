@@ -29,6 +29,7 @@ class ActivityOut(BaseModel):
     materials: list[str]
     registration_url: str | None
     contact: str | None
+    extra: str | None = None
     status: str
     needs_review: bool
     review_reasons: list[str] = Field(default_factory=list)
@@ -68,6 +69,7 @@ class PreviewActivityOut(BaseModel):
     materials: list[str]
     registration_url: str | None
     contact: str | None
+    extra: str | None = None
     needs_review: bool
     review_reasons: list[str] = Field(default_factory=list)
 
@@ -161,6 +163,7 @@ class ActivityEdit(BaseModel):
     materials: list[str] = Field(default_factory=list)
     registration_url: str | None = Field(default=None, max_length=2_000)
     contact: str | None = Field(default=None, max_length=500)
+    extra: str | None = Field(default=None, max_length=2_000)
 
     @field_validator(
         "title",
@@ -168,6 +171,7 @@ class ActivityEdit(BaseModel):
         "location",
         "registration_url",
         "contact",
+        "extra",
     )
     @classmethod
     def strip_optional_text(cls, value: str | None) -> str | None:

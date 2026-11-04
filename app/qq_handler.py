@@ -67,9 +67,13 @@ class QQHandler:
             result = await self._post_message(payload)
             if result is not None:
                 line = qq_media.describe_text_ingest(result)
+                # 作废/更正会走 updated，也要回执，否则群里会以为机器人没收到。
                 if line and (
                     self.reply_text == "always"
-                    or (self.reply_text == "created" and result.get("disposition") == "created")
+                    or (
+                        self.reply_text == "created"
+                        and result.get("disposition") in {"created", "updated"}
+                    )
                 ):
                     replies.append(line)
                 elif mentioned and result.get("disposition") == "duplicate":

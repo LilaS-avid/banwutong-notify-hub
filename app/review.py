@@ -44,6 +44,11 @@ REASON_INFO: dict[str, ReasonInfo] = {
         severity="warning",
         hint="模型给出的截止时间和正则解析相差超过一天，两者必有一个读错了。",
     ),
+    "material_conflict": ReasonInfo(
+        label="材料说法相互矛盾",
+        severity="warning",
+        hint="原文一边说不需要提交任何文件，一边又要求上传截图之类的东西，需要人工确认到底要交什么。",
+    ),
 }
 
 REASON_PRIORITY = tuple(REASON_INFO)

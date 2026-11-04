@@ -14,43 +14,62 @@ def make_client(tmp_path, monkeypatch, user="teacher", password="secret") -> Tes
     )
 
 
-def test_guest_can_read_and_import_but_not_edit(tmp_path, monkeypatch) -> None:
+def test_guest_is_read_only(tmp_path, monkeypatch) -> None:
+    """访客只能看：导入、上传、预览、撤回、文件与待核对全部挡在登录之后。"""
     with make_client(tmp_path, monkeypatch) as client:
         assert client.get("/api/activities").status_code == 200
-
-        # 没有访客 Cookie 时不能写
-        assert (
-            client.post(
-                "/api/messages",
-                json={"platform": "manual", "external_id": "g-0", "text": "随便一条"},
-            ).status_code
-            == 401
-        )
 
         client.get("/?guest=1", headers={"accept": "text/html"})
         assert client.cookies.get("bwt_guest") == "1"
 
+        assert client.get("/api/activities").status_code == 200
+        assert (
+            client.post(
+                "/api/messages",
+                json={
+                    "platform": "manual",
+                    "external_id": "g-1",
+                    "text": "活动名称：创新大赛\n报名截止：2026-11-05 18:00",
+                },
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post("/api/preview", json={"text": "活动名称：创新大赛"}).status_code
+            == 401
+        )
+        assert client.get("/api/files").status_code == 401
+        assert client.get("/api/reviews").status_code == 401
+        assert (
+            client.post(
+                "/api/chat", json={"messages": [{"role": "user", "content": "hi"}]}
+            ).status_code
+            == 401
+        )
+
+        # 登录以后才有写权限
+        client.post("/api/login", json={"username": "teacher", "password": "secret"})
         imported = client.post(
             "/api/messages",
             json={
                 "platform": "manual",
-                "external_id": "g-1",
+                "external_id": "g-2",
                 "text": "活动名称：创新大赛\n报名截止：2026-11-05 18:00",
             },
         )
         assert imported.status_code == 201
 
-        activity_id = imported.json()["activity"]["id"]
-        assert (
-            client.patch(
-                f"/api/activities/{activity_id}", json={"status": "completed"}
-            ).status_code
-            == 401
-        )
-        assert (
-            client.delete(f"/api/activities/{activity_id}").status_code == 401
-        )
-        assert client.post("/api/chat", json={"messages": [{"role": "user", "content": "hi"}]}).status_code == 401
+
+def test_guest_cannot_open_ai_chat_page(tmp_path, monkeypatch) -> None:
+    with make_client(tmp_path, monkeypatch) as client:
+        client.get("/?guest=1", headers={"accept": "text/html"})
+
+        response = client.get("/chat", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/login"
+
+        client.post("/api/login", json={"username": "teacher", "password": "secret"})
+        assert client.get("/chat").status_code == 200
 
 
 def test_guest_cannot_read_message_stream(tmp_path, monkeypatch) -> None:

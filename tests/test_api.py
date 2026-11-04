@@ -26,6 +26,136 @@ def make_client(tmp_path) -> TestClient:
     )
 
 
+def test_title_match_breaks_tie_by_closeness() -> None:
+    """两条旧事项命中长度一样时，选跟标题更贴合的那条。"""
+    from app.repository import _best_title_match
+
+    rows = [{"title": "上交读书笔记"}, {"title": "读书笔记回收登记"}]
+    best = _best_title_match(rows, {"读书笔记收集任务"})
+    assert best is not None and best["title"] == "上交读书笔记"
+
+
+def test_supplement_notice_updates_original_card(tmp_path) -> None:
+    """补充通知是对原事项的补充，只能更新原卡，不能新建一列。"""
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "notes-base",
+                "text": "活动名称：上交读书笔记\n截止时间：2026-11-09 00:00\n上交内容：读书笔记Word文档",
+            },
+        ).json()
+        activity_id = created["activity"]["id"]
+
+        supplement = client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "notes-supplement",
+                "text": "补充上交读书笔记通知，需额外上交一份图片",
+            },
+        ).json()
+
+        assert supplement["disposition"] == "updated"
+        assert supplement["activity"]["id"] == activity_id
+        assert "图片" in supplement["activity"]["materials"]
+
+        board = client.get("/api/activities").json()
+        assert [item["id"] for item in board] == [activity_id]
+
+
+def test_recall_message_undoes_its_effect(tmp_path) -> None:
+    """撤回补充通知：事项要回到补充之前的样子。"""
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "recall-base",
+                "text": "活动名称：上交读书笔记\n截止时间：2026-11-09 00:00\n上交内容：Word文档",
+            },
+        ).json()
+        activity_id = created["activity"]["id"]
+        before = created["activity"]["materials"]
+
+        client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "recall-supplement",
+                "text": "补充上交读书笔记通知，需额外上交一份图片",
+            },
+        )
+
+        messages = client.get("/api/messages").json()
+        supplement_id = next(
+            item["id"] for item in messages if "补充" in item["text"]
+        )
+
+        recalled = client.post(f"/api/messages/{supplement_id}/recall")
+        assert recalled.status_code == 200
+        assert recalled.json()["restored"] == 1
+
+        activity = next(
+            item for item in client.get("/api/activities").json() if item["id"] == activity_id
+        )
+        assert activity["materials"] == before
+
+
+def test_recall_created_message_moves_activity_to_trash(tmp_path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "recall-only",
+                "text": "活动名称：临时通知\n截止时间：2026-11-09 00:00",
+            },
+        ).json()
+        activity_id = created["activity"]["id"]
+        message_id = client.get("/api/messages").json()[0]["id"]
+
+        recalled = client.post(f"/api/messages/{message_id}/recall")
+        assert recalled.json()["trashed"] == 1
+        assert client.get("/api/activities").json() == []
+        assert [item["id"] for item in client.get("/api/trash").json()] == [activity_id]
+
+
+def test_cancel_notice_retires_old_activity_to_trash(tmp_path) -> None:
+    """作废通知要把旧事项作废并进回收站，而不是新建一张卡。"""
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/api/messages",
+            json={"platform": "manual", "external_id": "cancel-base", "text": NOTICE},
+        ).json()
+        activity_id = created["activity"]["id"]
+
+        cancelled = client.post(
+            "/api/messages",
+            json={
+                "platform": "manual",
+                "external_id": "cancel-notice",
+                "text": "⚠️作废通知：刚才发的【创新大赛】取消，不再收集，大家不用提交了。",
+            },
+        )
+
+        assert cancelled.status_code == 201
+        assert cancelled.json()["disposition"] == "updated"
+        assert cancelled.json()["activity"]["id"] == activity_id
+        assert cancelled.json()["activity"]["status"] == "cancelled"
+
+        # 看板里不再出现，也没有多出卡片
+        board = client.get("/api/activities").json()
+        assert all(item["id"] != activity_id for item in board)
+        assert board == []
+
+        # 进了回收站，可以恢复
+        trash = client.get("/api/trash").json()
+        assert [item["id"] for item in trash] == [activity_id]
+        assert client.post(f"/api/activities/{activity_id}/restore").status_code == 200
+
+
 def test_message_ingestion_is_idempotent(tmp_path) -> None:
     with make_client(tmp_path) as client:
         payload = {
@@ -114,6 +244,7 @@ def test_user_can_edit_activity_content(tmp_path) -> None:
                 "location": "大学生活动中心",
                 "contact": "张老师",
                 "registration_url": "https://example.com/updated",
+                "extra": "所有文件不要压缩打包",
             },
         )
 
@@ -126,6 +257,7 @@ def test_user_can_edit_activity_content(tmp_path) -> None:
         assert activity["location"] == "大学生活动中心"
         assert activity["contact"] == "张老师"
         assert activity["registration_url"] == "https://example.com/updated"
+        assert activity["extra"] == "所有文件不要压缩打包"
         assert activity["status"] == "open"
         assert activity["needs_review"] is False
 

@@ -208,18 +208,26 @@ def create_app(
             return await call_next(request)
         if is_authenticated(request):
             return await call_next(request)
+        # 文件、待核对证据属于个人/群聊内容，必须登录后才能读写。
+        private_api = (
+            path.startswith("/api/files")
+            or path.startswith("/api/reviews")
+            or (
+                path.startswith("/api/activities/")
+                and path.endswith("/review")
+            )
+        )
+        if private_api:
+            return JSONResponse(
+                {"detail": "登录后才能查看", "code": "login_required"},
+                status_code=401,
+            )
         guest = (
             request.cookies.get(GUEST_COOKIE) == "1"
             or request.query_params.get("guest") == "1"
         )
-        # 访客只能读，外加「导入通知」这一个写入口（走本地规则，不花云端额度）。
+        # 访客只读：不开放导入、上传、撤回等任何写操作。
         if guest and request.method in {"GET", "HEAD", "OPTIONS"}:
-            return await call_next(request)
-        if (
-            request.cookies.get(GUEST_COOKIE) == "1"
-            and request.method == "POST"
-            and path in {"/api/messages", "/api/files", "/api/preview"}
-        ):
             return await call_next(request)
         if request.method in {"GET", "HEAD", "OPTIONS"} and path.startswith("/api/"):
             # 未登录也能看到只读接口，但首页仍然先去登录页
@@ -351,6 +359,7 @@ def create_app(
                 materials=item.parsed.materials,
                 registration_url=item.parsed.registration_url,
                 contact=item.parsed.contact,
+                extra=item.parsed.extra,
                 needs_review=item.parsed.needs_review,
                 review_reasons=item.parsed.review_reasons,
             )
@@ -372,6 +381,16 @@ def create_app(
         if not is_authenticated(request):
             raise HTTPException(status_code=403, detail="群消息流水仅登录用户可见")
         return repository.list_messages(limit)
+
+    @app.post("/api/messages/{message_id}/recall")
+    def recall_message(message_id: int, request: Request) -> dict:
+        """撤回一条消息：还原它改动过的事项，或把它新建的事项退回回收站。"""
+        if not is_authenticated(request):
+            raise HTTPException(status_code=403, detail="只有登录用户可以撤回消息")
+        result = repository.recall_message(message_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        return {"ok": True, **result}
 
     @app.post("/api/messages/{message_id}/promote", response_model=IngestOut)
     async def promote_message(message_id: int) -> IngestOut:
@@ -417,7 +436,13 @@ def create_app(
         return model_settings()
 
     @app.post("/api/chat", response_model=ChatResponse)
-    async def chat(payload: ChatRequest) -> ChatResponse:
+    async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
+        # 访客模式（先直接进入）没有云端模型，AI 对话不开放，前端也不再挂这个入口。
+        if not is_authenticated(request):
+            raise HTTPException(
+                status_code=401,
+                detail="访客模式不开放 AI 对话，请先登录",
+            )
         provider = active_provider()
         if provider == "rules":
             raise HTTPException(
@@ -792,7 +817,10 @@ def create_app(
         return response
 
     @app.get("/chat", include_in_schema=False)
-    def chat_page() -> FileResponse:
+    def chat_page(request: Request) -> Response:
+        # 访客直接进 /chat 也看不到对话，统一回登录页。
+        if not is_authenticated(request):
+            return RedirectResponse(url="/login", status_code=302)
         return FileResponse(STATIC_DIR / "chat.html")
 
     @app.get("/sw.js", include_in_schema=False)
